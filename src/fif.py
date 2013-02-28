@@ -72,6 +72,7 @@ def realize(PowerSpec,
     K[...] = (i ** 2 + j ** 2 + k ** 2) ** 0.5 * K0
     PK = PowerSpec(K) ** 0.5
     gauss[i] *= (PK * K0 ** 1.5) * kernel(i * K0, j * K0, k * K0, K)
+    gauss[i][numpy.isnan(gauss[i])] = 0
     if NmeshCoarse:
       thresh = NmeshCoarse * Nsample / Nmesh / 2
       if i < thresh and i > - thresh:
@@ -90,9 +91,9 @@ def realize_losdisp(PowerSpec, cornerpos,
             seed, Nmesh, Nsample, BoxSize, 
             NmeshCoarse=None):
   dispkernel = [
-    lambda kx, ky, kz, k: 1j * kx * k ** 2,
-    lambda kx, ky, kz, k: 1j * ky * k ** 2,
-    lambda kx, ky, kz, k: 1j * kz * k ** 2]
+    lambda kx, ky, kz, k: 1j * kx * k ** -2,
+    lambda kx, ky, kz, k: 1j * ky * k ** -2,
+    lambda kx, ky, kz, k: 1j * kz * k ** -2]
   losdisp = numpy.zeros((Nsample, Nsample, Nsample), dtype='f4')
   for ax in range(3):
     disp = realize(PowerSpec, seed=seed, Nmesh=Nmesh, 
@@ -114,6 +115,8 @@ Box = 12000000
 PowerSpec = loadpower()
 NmeshEff = 8192
 Nsample = 256 
+
+if len(argv) == 1: raise Exception("will not run")
 
 Nrep = NmeshEff / Nsample
 seed0 = numpy.random.randint(1<<21 - 1)
