@@ -1,17 +1,45 @@
 import numpy
-from scipy.interpolate import interp1d
-from scipy.ndimage.interpolation import map_coordinates
+from args import parseargs, loadpixel
+from scipy.ndimage import map_coordinates
 import sharedmem
-from sys import argv
+def main():
+  global A, delta0, losdisp0
+  A = parseargs()
+  loadpixel(A, 0, 1, 0)
+  delta0 = realize(A.power, A.seed0, 
+                 A.Nmesh, A.Nmesh, A.BoxSize)
+  losdisp0 = realize_losdisp(A.power, [0, 0, 0],
+               A.seed0, A.Nmesh, A.Nmesh, A.BoxSize)
 
-pixeldtype = numpy.dtype(
-    [ ('pos', ('f4', 3)), ('row', 'i4'), ('ind', 'i4'), ('Z', 'f4')])
+  def work(jk):
+    j = jk // A.Nrep
+    k = jk % A.Nrep
+    fill = fillpixels(A, delta0, losdisp0, A.i, j, k)
+    fill.tofile('%s/%02d-%02d-%02d-delta.raw' % (A.datadir, A.i, j, k))
+  with sharedmem.Pool() as pool:
+    pool.map(work, range(A.Nrep * A.Nrep))
 
-def loadpixel(i, j, k, prefix='32/'):
-  try:
-    return numpy.fromfile(prefix + "%02d-%02d-%02d-pixels.raw" % (i, j, k), dtype=pixeldtype)
-  except IOError:
-    return numpy.array([], dtype=pixeldtype)
+def fillpixels(A, delta0, losdisp0, i, j, k):
+  pixels = loadpixel(A, i, j, k)
+  if len(pixels) == 0: return numpy.array([])
+  RepSpacing = A.BoxSize / A.Nrep
+  print RepSpacing, numpy.array([i, j, k])
+  cornerpos = numpy.array([i, j, k]) * RepSpacing
+
+  delta1 = realize(A.power, A.seedtable[i, j, k], A.NmeshEff, 
+               A.Nmesh, A.BoxSize, A.Nmesh)
+  losdisp1 = realize_losdisp(A.power, cornerpos,
+               A.seedtable[i, j, k], A.NmeshEff,
+               A.Nmesh, A.BoxSize, A.Nmesh)
+  coarse = pixels['pos'] / A.BoxSize * A.Nmesh
+  fine = (pixels['pos'] / A.BoxSize * A.Nrep - [i, j, k]) * A.Nmesh
+  d0 = map_coordinates(delta0, coarse.T, mode='wrap')
+  disp0 = map_coordinates(losdisp0, coarse.T, mode='wrap', order=5)
+  d1 = map_coordinates(delta1, fine.T, mode='wrap')
+  disp1 = map_coordinates(losdisp1, fine.T, mode='wrap', order=5)
+  pixels['delta'] = d1 + d0
+  pixels['losdisp'] = disp0 + disp1
+  return pixels
 
 def realize(PowerSpec,
             seed, Nmesh, Nsample, BoxSize, 
@@ -41,6 +69,7 @@ def realize(PowerSpec,
           ).view(dtype=numpy.complex128).reshape(Nsample, Nsample, Nsample / 2 + 1)
 
   # convolve gauss with powerspec to delta_k, stored in gauss.
+  #print Nmesh, BoxSize, Nsample, K0, 'kmax = ', Nsample / 2 * K0
   for i in range(Nsample):
     # loop over i to save memory
     if i > Nsample / 2: i = i - Nsample
@@ -52,12 +81,13 @@ def realize(PowerSpec,
     gauss[i] *= (PK * K0 ** 1.5) * kernel(i * K0, j * K0, k * K0, K)
     gauss[i][numpy.isnan(gauss[i])] = 0
     if NmeshCoarse:
-      thresh = NmeshCoarse * Nsample / Nmesh / 2
+      K0Coarse = 2 * numpy.pi / BoxSize
+      Kthresh = K0Coarse * NmeshCoarse / 2
+      thresh = Kthresh / K0
       if i < thresh and i > - thresh:
         mask = (j < thresh) & (k < thresh) & \
                (j > - thresh) & (k > -thresh)
         gauss[i][mask] = 0
-  
   gauss[Nsample / 2, ...] = 0
   gauss[:, Nsample / 2, :] = 0
   gauss[:, :, Nsample / 2] = 0
@@ -84,52 +114,9 @@ def realize_losdisp(PowerSpec, cornerpos,
       z = cornerpos[2] + k * (BoxSize / Nmesh * Nsample) - BoxSize * 0.5
       disp[i] *= ([-x, -y, -z][ax])
       disp[i] *= (x ** 2 + y ** 2 + z ** 2) ** -0.5
+      disp[i][numpy.isnan(disp[i])] = 0
     losdisp += disp
   return losdisp
 
-numpy.random.seed(1811720)
-Box = 12000000
-#PowerSpec = loadpower('power-16384.txt')
-PowerSpec = loadpower()
-NmeshEff = 8192
-Nsample = 256 
+main()
 
-if len(argv) == 1: raise Exception("will not run")
-
-Nrep = NmeshEff / Nsample
-seed0 = numpy.random.randint(1<<21 - 1)
-seedtable = numpy.random.randint(1<<21 - 1, size=(Nrep, Nrep, Nrep))
-delta0 = realize(PowerSpec, seed0, Nsample, Nsample, Box)
-losdisp0 = realize_losdisp(PowerSpec, [0, 0, 0],
-               seed0, Nsample, Nsample, Box)
-
-def dopixels(i, j, k):
-  pixels = loadpixel(i, j, k, prefix='%d/' % Nrep)
-  if len(pixels) == 0: return numpy.array([])
-  cornerpos = [i * Box / Nrep, j * Box / Nrep, k * Box / Nrep]
-  delta1 = realize(PowerSpec, seedtable[i, j, k], NmeshEff, 
-               Nsample, Box, Nsample)
-  losdisp1 = realize_losdisp(PowerSpec, cornerpos,
-               seedtable[i, j, k], NmeshEff,
-               Nsample, Box, Nsample)
-  coarse = pixels['pos'] / Box * Nsample
-  fine = (pixels['pos'] / Box * Nrep - [i, j, k]) * Nsample
-  d0 = map_coordinates(delta0, coarse.T, mode='wrap')
-  disp0 = map_coordinates(losdisp0, coarse.T, mode='wrap')
-  d1 = map_coordinates(delta1, fine.T, mode='wrap')
-  disp1 = map_coordinates(losdisp1, fine.T, mode='wrap')
-  return numpy.array([d1 + d0, disp0 + disp1]).T
-
-if __name__ == '__main__':
-  i = int(argv[1])
-  def work(jk):
-    j = jk // Nrep
-    k = jk % Nrep
-    delta = dopixels(i, j, k)
-    if len(delta) == 0: return
-    print i, j, k, delta.shape
-    delta.tofile('out-%d/%02d-%02d-%02d-delta.raw' % (Nrep, i, j, k))
-  
-  with sharedmem.Pool() as pool:
-    pool.map(work, range(Nrep * Nrep))
-  
