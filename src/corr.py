@@ -4,13 +4,17 @@ from gaepsi.compiledbase.tree import Tree
 from scipy.integrate import simps
 from args import pixeldtype
 BoxSize = 2000000
+
+def fixgrid(Pall, NmeshEff, Nmesh):
+  Nrep = NmeshEff / Nmesh
+  return Pall.reshape((Nrep, Nrep, Nrep, Nmesh, Nmesh, Nmesh)).transpose((0,3,1,4,2,5)).reshape(NmeshEff, NmeshEff, NmeshEff)
+
 def buildtree(P):
   tree = Tree(min=[0, 0, 0], ptp=BoxSize, splitthresh=512, nbits=28)
   tree.build(P['pos'], argsort=lambda self, pos, out: 
           sharedmem.argsort(pos, serialargsort=self.argsort, out=out, merge=tree.merge)
   )
   return tree
-
 def powerfromdelta(delta, BoxSize=BoxSize):
   Dplus = 1.0
   K0 = 2 * numpy.pi / BoxSize

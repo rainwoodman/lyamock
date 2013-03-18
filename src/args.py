@@ -8,13 +8,13 @@ from scipy.interpolate import interp1d
 pixeldtype = numpy.dtype(
     [ ('pos', ('f4', 3)), ('delta', 'f4'), ('losdisp', 'f4'), ('row', 'i4'), ('ind', 'i4'), ('Z', 'f4')])
 
-def parseargs():
+def parseargs(argv=None):
   parser = argparse.ArgumentParser(description="")
   parser.add_argument("paramfile", 
                help="the paramfile")
   parser.add_argument("i",
                help="which row to do", type=int)
-  args = parser.parse_args()
+  args = parser.parse_args(argv)
   config = ConfigParser.ConfigParser()
   str = file(args.paramfile).read().replace(';', ',').replace('#', ';')
   config.readfp(StringIO.StringIO(str))

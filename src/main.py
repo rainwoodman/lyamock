@@ -5,7 +5,6 @@ import sharedmem
 def main():
   global A, delta0, losdisp0
   A = parseargs()
-  loadpixel(A, 0, 1, 0)
   delta0 = realize(A.power, A.seed0, 
                  A.Nmesh, A.Nmesh, A.BoxSize)
   losdisp0 = realize_losdisp(A.power, [0, 0, 0],
