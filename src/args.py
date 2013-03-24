@@ -4,6 +4,7 @@ import StringIO
 import ConfigParser
 import argparse
 from scipy.interpolate import interp1d
+from cosmology import Cosmology
 
 pixeldtype = numpy.dtype(
     [ ('pos', ('f4', 3)), ('delta', 'f4'), ('losdisp', 'f4'), ('row', 'i4'), ('ind', 'i4'), ('Z', 'f4')])
@@ -29,14 +30,16 @@ def parseargs(argv=None):
   assert args.NmeshEff % args.Nmesh  == 0
 
   args.Seed = config.getint("IC", "Seed")
-  args.Sigma8 = config.getfloat("Cosmology", "Sigma8")
-  args.OmegaM = config.getfloat("Cosmology", "OmegaM")
-  args.OmegaB = config.getfloat("Cosmology", "OmegaB")
-  args.OmegaL = config.getfloat("Cosmology", "OmegaL")
-  args.h = config.getfloat("Cosmology", "h")
+  Sigma8 = config.getfloat("Cosmology", "Sigma8")
+  OmegaM = config.getfloat("Cosmology", "OmegaM")
+  OmegaB = config.getfloat("Cosmology", "OmegaB")
+  OmegaL = config.getfloat("Cosmology", "OmegaL")
+  h = config.getfloat("Cosmology", "h")
   args.G = 43007.1
+  args.C = 299792.458
   args.H = 0.1
-
+  args.cosmology = Cosmology(M=OmegaM, 
+            L=OmegaL, B=OmegaB, h=h, sigma8=Sigma8)
   args.Offset = numpy.array(numpy.unravel_index(numpy.arange(args.Nrep ** 3),
              (args.Nrep, ) * 3)).T.reshape(args.Nrep, args.Nrep, args.Nrep, 3) \
                * args.BoxSize / args.Nrep
@@ -64,19 +67,12 @@ def parseargs(argv=None):
   return args
 
 def loadpower(args):
-    import pycamb
-    a = dict(H0=args.h * 100, 
-          omegac=args.OmegaM - args.OmegaB, 
-          omegab=args.OmegaB, 
-          omegav=args.OmegaL, 
-          omegak=0, omegan=0)
-    fakesigma8 = pycamb.transfers(scalar_amp=1, **a)[2]
-    scalar_amp = fakesigma8 ** -2 * args.Sigma8 ** 2
-    k, p = pycamb.matter_power(scalar_amp=scalar_amp, maxk=10, **a)
-    k /= 1000
-    p *= 1e9 * (2 * numpy.pi) ** -3 # xiao to GADGET
-    p[numpy.isnan(p)] = 0
-    return interp1d(k, p, kind='linear', copy=True, bounds_error=False, fill_value=0)
+    Pk = args.cosmology.Pk
+    def func(k, Pk=args.cosmology.Pk, DH=args.C/args.H):
+       return Pk(k * DH) * DH ** 3 * (2 * numpy.pi) ** -3
+    func.x = Pk.x / DH
+    func.y = Pk.y * DH ** 3 * (2 * numpy.pi) ** -3
+    return func
 
 def loadpixel(args, i, j, k):
   if args.pixeldir is not None:

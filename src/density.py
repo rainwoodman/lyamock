@@ -1,49 +1,8 @@
-import numpy
-from args import parseargs, loadpixel
-from scipy.ndimage import map_coordinates
-import sharedmem
-
-def main():
-  global A, delta0, losdisp0
-  A = parseargs()
-  delta0 = realize(A.power, A.seed0, 
-                 A.Nmesh, A.Nmesh, A.BoxSize)
-  losdisp0 = realize_losdisp(A.power, [0, 0, 0],
-               A.seed0, A.Nmesh, A.Nmesh, A.BoxSize)
-
-  def work(jk):
-    j = jk // A.Nrep
-    k = jk % A.Nrep
-    fill = fillpixels(A, delta0, losdisp0, A.i, j, k)
-    fill.tofile('%s/%02d-%02d-%02d-delta.raw' % (A.datadir, A.i, j, k))
-  with sharedmem.Pool() as pool:
-    pool.map(work, range(A.Nrep * A.Nrep))
-
-def fillpixels(A, delta0, losdisp0, i, j, k):
-  pixels = loadpixel(A, i, j, k)
-  if len(pixels) == 0: return numpy.array([])
-  RepSpacing = A.BoxSize / A.Nrep
-  print RepSpacing, numpy.array([i, j, k])
-  cornerpos = numpy.array([i, j, k]) * RepSpacing
-
-  coarse = pixels['pos'] / A.BoxSize * A.Nmesh
-  pixels['delta'] = map_coordinates(delta0, coarse.T, mode='wrap')
-  pixels['losdisp'] = map_coordinates(losdisp0, coarse.T, mode='wrap', order=3)
-
-  if A.Nrep > 1:
-    delta1 = realize(A.power, A.seedtable[i, j, k], A.NmeshEff, 
-               A.Nmesh, A.BoxSize, A.Nmesh)
-    losdisp1 = realize_losdisp(A.power, cornerpos,
-               A.seedtable[i, j, k], A.NmeshEff,
-               A.Nmesh, A.BoxSize, A.Nmesh)
-    fine = (pixels['pos'] / A.BoxSize * A.Nrep - [i, j, k]) * A.Nmesh
-    pixels['delta'] += map_coordinates(delta1, fine.T, mode='wrap')
-    pixels['losdisp'] += map_coordinates(losdisp1, fine.T, mode='wrap', order=3)
-  return pixels
 
 def realize(PowerSpec,
             seed, Nmesh, Nsample, BoxSize, 
             NmeshCoarse=None,
+            lognormal=True,
             kernel=lambda kx, ky, kz, k: 1):
   """
       realize a powerspectrum.
@@ -58,9 +17,10 @@ def realize(PowerSpec,
       The actual resolution is BoxSize / Nmesh.
 
       if NmeshCoarse is not None, leave out a region of
-      size NmeshCoarse * K0 in the middle of the power.
+      [ - 0.5 * NmeshCoarse * K0, 0.5 * NmeshCoarse * K0]
+      in the middle of the power spectrum,
       presumbaly power from region will be added as large
-      scale power from a different realization with interpolation.
+      scale power from a different realization, with interpolation.
   """
   rng = numpy.random.RandomState(seed)
   K0 = 2 * numpy.pi / (BoxSize * Nsample / Nmesh)
@@ -69,7 +29,6 @@ def realize(PowerSpec,
           ).view(dtype=numpy.complex128).reshape(Nsample, Nsample, Nsample / 2 + 1)
 
   # convolve gauss with powerspec to delta_k, stored in gauss.
-  #print Nmesh, BoxSize, Nsample, K0, 'kmax = ', Nsample / 2 * K0
   for i in range(Nsample):
     # loop over i to save memory
     if i > Nsample / 2: i = i - Nsample
@@ -81,18 +40,30 @@ def realize(PowerSpec,
     gauss[i] *= (PK * K0 ** 1.5) * kernel(i * K0, j * K0, k * K0, K)
     gauss[i][numpy.isnan(gauss[i])] = 0
     if NmeshCoarse:
-      K0Coarse = 2 * numpy.pi / BoxSize
-      Kthresh = K0Coarse * NmeshCoarse / 2
-      thresh = Kthresh / K0
+      thresh = NmeshCoarse * Nsample / Nmesh / 2
       if i < thresh and i > - thresh:
         mask = (j < thresh) & (k < thresh) & \
                (j > - thresh) & (k > -thresh)
         gauss[i][mask] = 0
+  
   gauss[Nsample / 2, ...] = 0
   gauss[:, Nsample / 2, :] = 0
   gauss[:, :, Nsample / 2] = 0
+  if lognormal:
+    # here we should have applied a factor 
+    # 1 / (1 + x_b **2 k **2) but for the scale
+    # we care this is neglegible.
+    pass
+
   delta = numpy.fft.irfftn(gauss)
+  # fix the fftpack normalization
   delta *= Nsample ** 3
+
+  if lognormal:
+    # lognormal transformation
+    delta -= (delta ** 2).mean() / 2
+    numpy.exp(delta, out=delta)
+  
   return numpy.float32(delta)
 
 def realize_losdisp(PowerSpec, cornerpos,
@@ -106,7 +77,7 @@ def realize_losdisp(PowerSpec, cornerpos,
   for ax in range(3):
     disp = realize(PowerSpec, seed=seed, Nmesh=Nmesh, 
            Nsample=Nsample, BoxSize=BoxSize, NmeshCoarse=NmeshCoarse,
-           kernel=dispkernel[ax])
+           lognormal=False, kernel=dispkernel[ax])
     for i in range(Nsample):
       j, k = numpy.ogrid[0:Nsample, 0:Nsample]
       x = cornerpos[0] + i * (BoxSize / Nmesh * Nsample) - BoxSize * 0.5
@@ -114,9 +85,5 @@ def realize_losdisp(PowerSpec, cornerpos,
       z = cornerpos[2] + k * (BoxSize / Nmesh * Nsample) - BoxSize * 0.5
       disp[i] *= ([-x, -y, -z][ax])
       disp[i] *= (x ** 2 + y ** 2 + z ** 2) ** -0.5
-      disp[i][numpy.isnan(disp[i])] = 0
     losdisp += disp
   return losdisp
-
-main()
-
