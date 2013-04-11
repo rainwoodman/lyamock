@@ -2,9 +2,8 @@ import numpy
 import sharedmem
 from gaepsi.compiledbase.tree import Tree
 from scipy.integrate import simps
-from args import pixeldtype
+from args import *
 BoxSize = 2000000
-
 def fixgrid(Pall, NmeshEff, Nmesh):
   Nrep = NmeshEff / Nmesh
   return Pall.reshape((Nrep, Nrep, Nrep, Nmesh, Nmesh, Nmesh)).transpose((0,3,1,4,2,5)).reshape(NmeshEff, NmeshEff, NmeshEff)

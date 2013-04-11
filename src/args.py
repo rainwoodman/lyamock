@@ -7,71 +7,187 @@ from scipy.interpolate import interp1d
 from cosmology import Cosmology
 
 pixeldtype = numpy.dtype(
-    [ ('pos', ('f4', 3)), ('delta', 'f4'), ('losdisp', 'f4'), ('row', 'i4'), ('ind', 'i4'), ('Z', 'f4')])
+    [('delta', 'f4'), ('losdisp', 'f4'), ('row', 'i4'), ('ind', 'i4'), ('Z', 'f4')])
 
-def parseargs(argv=None):
-  parser = argparse.ArgumentParser(description="")
-  parser.add_argument("paramfile", 
+pixeldtype2 = numpy.dtype(
+    [('F', 'f4'), ('losvel', 'f4'), ('row', 'i4'), ('ind', 'i4'), ('Z', 'f4')])
+
+class Config(argparse.Namespace):
+    parser = argparse.ArgumentParser(description="")
+    parser.add_argument("paramfile", 
                help="the paramfile")
-  parser.add_argument("i",
-               help="which row to do", type=int)
-  args = parser.parse_args(argv)
-  config = ConfigParser.ConfigParser()
-  str = file(args.paramfile).read().replace(';', ',').replace('#', ';')
-  config.readfp(StringIO.StringIO(str))
+    parser.add_argument("mode", choices=['firstpass',
+       'secondpass', 
+       'thirdpass',
+       'fourthpass',
+       'fifthpass',
+       ])
+    parser.add_argument("--row",
+               help="which row to do", type=int,
+               default=None)
+    parser.add_argument("--serial",
+               help="serial", action='store_true', default=False)
 
-  args.datadir = config.get("IO", "datadir")
-  args.BoxSize = config.getfloat("IC", "BoxSize")
-  args.Redshift = config.getfloat("IC", "Redshift")
-  args.Nmesh = config.getint("IC", "Nmesh")
-  args.NmeshEff = config.getint("IC", "NmeshEff")
+    def export(self, dict, names):
+        for name in names:
+            setattr(self, name, dict[name])
+    def basename(self, i, j, k, post):
+        return '%s/%02d-%02d-%02d-delta-%s' % (self.datadir, i, j, k, post)
+    def FPGAmeanflux(self, a):
+        return numpy.exp(-10**(self.FitB + self.FitA * numpy.log10(a)))
 
-  args.Nrep = args.NmeshEff // args.Nmesh
-  assert args.NmeshEff % args.Nmesh  == 0
+    def __init__(self, argv):
+        Config.parser.parse_args(argv, self)
 
-  args.Seed = config.getint("IC", "Seed")
-  Sigma8 = config.getfloat("Cosmology", "Sigma8")
-  OmegaM = config.getfloat("Cosmology", "OmegaM")
-  OmegaB = config.getfloat("Cosmology", "OmegaB")
-  OmegaL = config.getfloat("Cosmology", "OmegaL")
-  h = config.getfloat("Cosmology", "h")
-  args.G = 43007.1
-  args.C = 299792.458
-  args.H = 0.1
-  args.cosmology = Cosmology(M=OmegaM, 
+        config = ConfigParser.ConfigParser()
+        str = file(self.paramfile).read().replace(';', ',').replace('#', ';')
+        config.readfp(StringIO.StringIO(str))
+
+        Seed = config.getint("IC", "Seed")
+        BoxSize = config.getfloat("IC", "BoxSize")
+        Redshift = config.getfloat("IC", "Redshift")
+        Nmesh = config.getint("IC", "Nmesh")
+        NmeshEff = config.getint("IC", "NmeshEff")
+        NLyaBox = config.getint("IC", "NLyaBox")
+        Geometry = config.get("IC", "Geometry")
+
+        assert Geometry in ['Sphere', 'Test']
+
+        assert NmeshEff % Nmesh  == 0
+        Nrep = NmeshEff // Nmesh
+
+        self.export(locals(), [
+            'Seed', 'BoxSize', 'Redshift', 'Nmesh',
+            'NmeshEff', 'NLyaBox', 'Nrep', 'Geometry'])
+
+        Sigma8 = config.getfloat("Cosmology", "Sigma8")
+        OmegaM = config.getfloat("Cosmology", "OmegaM")
+        OmegaB = config.getfloat("Cosmology", "OmegaB")
+        OmegaL = config.getfloat("Cosmology", "OmegaL")
+        h = config.getfloat("Cosmology", "h")
+        G = 43007.1
+        C = 299792.458
+        H = 0.1
+        DH = C / H
+        cosmology = Cosmology(M=OmegaM, 
             L=OmegaL, B=OmegaB, h=h, sigma8=Sigma8)
-  args.Offset = numpy.array(numpy.unravel_index(numpy.arange(args.Nrep ** 3),
-             (args.Nrep, ) * 3)).T.reshape(args.Nrep, args.Nrep, args.Nrep, 3) \
-               * args.BoxSize / args.Nrep
-  print args.Nrep
-  numpy.random.seed(args.Seed)
-  args.seed0 = numpy.random.randint(1<<21 - 1)
-  args.seedtable = numpy.random.randint(1<<21 - 1, size=(args.Nrep,) * 3)
-  try:
-    power = config.get("IC", "PowerSpectrum")
-    k, p = numpy.loadtxt(power, unpack=True)
-    p[numpy.isnan(p)] = 0
-    args.power = interp1d(k, p, kind='linear', copy=True, 
-                    bounds_error=False, fill_value=0)
-    print 'using text file', power
-  except ConfigParser.NoOptionError:
-    print 'using PyCAMB'
-    args.power = loadpower(args)
-  try:
-    args.pixeldir = config.get("IO", 'pixeldir')
-    print 'using pixels from ', args.pixeldir
-  except ConfigParser.NoOptionError:
-    args.Npix = config.getint("IC", 'Npix')
-    print 'using regular pixel grid'
-    args.pixeldir = None
-  return args
+
+        self.export(locals(), [
+            'Sigma8', 'OmegaM', 'OmegaB', 'OmegaL',
+            'h', 'G', 'C', 'H', 'DH', 'cosmology'])
+
+        beta = config.getfloat("FPGA", "beta")
+        JeansScale = config.getfloat("FPGA", "JeansScale")
+        FitA = config.getfloat("FPGA", "FitA")
+        FitB = config.getfloat("FPGA", "FitB")
+        NmeshLya = int(BoxSize / NmeshEff / JeansScale * 0.25) * 4
+        print 'High res Lya fluctuation is NmeshLya = ', NmeshLya
+        print 'JeansScale is', JeansScale
+
+        self.export(locals(), [
+            'beta', 'JeansScale', 'FitA', 'FitB',
+            'NmeshLya'] )
+
+
+        numpy.random.seed(Seed)
+
+        datadir = config.get("IO", "datadir")
+        sightlinedtype = [('x1', ('f4', 3)),
+                       ('x2', ('f4', 3)),
+                       ('Zmax', 'f4'),
+                       ('Zmin', 'f4')]
+        if Geometry == 'Sphere':
+            linesfile = config.get("IO", 'sightlines')
+            raw = numpy.loadtxt(linesfile, usecols=(4, 5, 6, 0), 
+                      dtype=[('RA', 'f4'), 
+                             ('DEC', 'f4'), 
+                             ('Z_VI', 'f4'), 
+                             ('THINGID', 'i8')]).view(numpy.recarray)
+            sightlines = numpy.empty(raw.size, 
+                    dtype=sightlinedtype).view(numpy.recarray)
+            sightlines.Zmax = raw.Z_VI
+            sightlines.Zmin = (raw.Z_VI + 1) * 1026. / 1216 - 1
+            sightlines.Zmin.clip(min=0, out=sightlines.Zmin)
+            raw.RA *= numpy.pi / 180
+            raw.DEC *= numpy.pi / 180
+            sightlines.x1[:, 0] = numpy.cos(raw.RA) * numpy.sin(raw.DEC)
+            sightlines.x1[:, 1] = numpy.sin(raw.RA) * numpy.sin(raw.DEC)
+            sightlines.x1[:, 2] = numpy.cos(raw.DEC)
+            sightlines.x2[...] = sightlines.x1
+            Dcmin = cosmology.Dc(1 / (sightlines.Zmin + 1))[:, None]
+            Dcmax = cosmology.Dc(1 / (sightlines.Zmax + 1))[:, None]
+
+            sightlines.x1 *= Dcmin
+            sightlines.x2 *= Dcmax
+            sightlines.x1 *= DH
+            sightlines.x2 *= DH
+             
+            sightlines.x1 += BoxSize * 0.5
+            sightlines.x2 += BoxSize * 0.5
+        elif Geometry == 'Test':
+            NTestpix = config.getint("IC", 'NTestpix')
+            self.export(locals(), ['NTestpix'])
+            sightlines = numpy.empty(NTestpix ** 2, 
+                    dtype=sightlinedtype).view(numpy.recarray)
+            Zmin = Redshift
+            Dcmin = cosmology.Dc(1 / (Zmin + 1))
+            Zmax = 1 / cosmology.aback(Dcmin + BoxSize / DH) - 1
+            sightlines.Zmax[...] = Zmax
+            sightlines.Zmin[...] = Zmin
+            x, y = \
+                    numpy.indices((NTestpix, NTestpix)).reshape(2, -1) \
+                    * (BoxSize / NTestpix)
+            sightlines.x1[:, 0] = x
+            sightlines.x1[:, 1] = y
+            sightlines.x1[:, 2] = 0
+            sightlines.x2[...] = sightlines.x1 
+            sightlines.x2[:, 2] = BoxSize
+
+        assert (sightlines.x1 >= 0).all()
+        assert (sightlines.x1 <= BoxSize).all()
+        assert (sightlines.x2 >= 0).all()
+        assert (sightlines.x2 <= BoxSize).all()
+
+        Zmax = sightlines.Zmax.max()
+        Zmin = sightlines.Zmin.min()
+        self.export(locals(), [
+            'datadir', 'sightlines', 'Zmax', 'Zmin'])
+        print 'max Z is', Zmax, 'min Z is', Zmin
+
+        try:
+            power = config.get("Cosmology", "PowerSpectrum")
+        except ConfigParser.NoOptionError:
+            power = datadir + '/power.txt'
+        try:
+            k, p = numpy.loadtxt(power, unpack=True)
+            print 'using power from file ', power
+        except IOError:
+            print 'using power from pycamb, saving to ', power
+            Pk = cosmology.Pk
+            k = Pk.x / DH
+            p = Pk.y * DH ** 3 * (2 * numpy.pi) ** -3
+            numpy.savetxt(power, zip(k, p))
+
+        p[numpy.isnan(p)] = 0
+        power = interp1d(k, p, kind='linear', copy=True, 
+                         bounds_error=False, fill_value=0)
+        self.export(locals(), ['power'])
+
+    def yieldwork(self):
+        if self.row is not None:
+            for jk in range(self.Nrep * self.Nrep):
+                j, k = numpy.unravel_index(jk, (self.Nrep, ) * 2)
+                yield self.row, j, k
+        else:
+            for ijk in range(self.Nrep * self.Nrep * self.Nrep):
+                i, j, k = numpy.unravel_index(ijk, (self.Nrep, ) * 3)
+                yield i, j, k
+    
+def parseargs(argv=None):
+  return Config(argv)
+
 
 def loadpower(args):
-    Pk = args.cosmology.Pk
-    def func(k, Pk=args.cosmology.Pk, DH=args.C/args.H):
-       return Pk(k * DH) * DH ** 3 * (2 * numpy.pi) ** -3
-    func.x = Pk.x / DH
-    func.y = Pk.y * DH ** 3 * (2 * numpy.pi) ** -3
     return func
 
 def loadpixel(args, i, j, k):
@@ -81,12 +197,17 @@ def loadpixel(args, i, j, k):
     except IOError:
       return numpy.array([], dtype=pixeldtype)
   else:
+    Offset = numpy.array(numpy.unravel_index(numpy.arange(args.Nrep ** 3),
+             (args.Nrep, ) * 3)).T.reshape(args.Nrep, args.Nrep, args.Nrep, 3) \
+               * args.BoxSize / args.Nrep
     Npix = args.Npix / args.Nrep
-    pos = args.Offset[i, j, k] + \
-        numpy.array(numpy.unravel_index(numpy.arange(Npix ** 3),
-             (Npix, ) * 3)).T * (args.BoxSize / args.Nrep / Npix)
-    rt = numpy.empty(shape=len(pos), dtype=pixeldtype)
-    rt['pos'] = pos
-    rt['ind'] = numpy.arange(Npix ** 3)
-    rt['row'] = (i * args.Nrep * args.Nrep + j * args.Nrep + k)
+    intpos = numpy.array(numpy.unravel_index(numpy.arange(Npix ** 3),
+             (Npix, ) * 3)).T
+    rt = numpy.empty(shape=len(intpos), dtype=pixeldtype)
+    rt['pos'] = Offset[i, j, k] + intpos * (args.BoxSize / args.Npix)
+    DH = args.C / args.H
+    dist = rt['pos'][:, 2] + DH * args.cosmology.Dc(1 / (1. + args.Redshift))
+    rt['Z'] = 1 / args.cosmology.aback(dist / DH) - 1
+    rt['row'] = (i * Npix+ intpos[:, 0]) * args.Npix + j * Npix + intpos[:, 1]
+    rt['ind'] = intpos[:, 2] + k * Npix
     return rt

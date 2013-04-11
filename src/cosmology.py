@@ -33,12 +33,14 @@ class interp1d(InterpolatedUnivariateSpline):
     self.bounds_error = bounds_error
   def __call__(self, x):
     x = numpy.asarray(x)
+    shape = x.shape
+    x = x.ravel()
     bad = (x > self.xmax) | (x < self.xmin)
     if self.bounds_error and numpy.any(bad):
       raise ValueError("some values are out of bounds")
-    y = InterpolatedUnivariateSpline.__call__(self, x)
+    y = InterpolatedUnivariateSpline.__call__(self, x.ravel())
     y[bad] = self.fill_value
-    return y
+    return y.reshape(shape)
  
 Np = 1000
 logamin = -20
@@ -82,7 +84,7 @@ class Cosmology(object):
     def func(xval, 
             intp=interp1d(x, y, 
                bounds_error=True, 
-               fill_value=np.nan, kind=5)):
+               fill_value=numpy.nan, kind=5)):
       return intp(xval)
     func.__doc__ = \
     """evaluates look-back time 
@@ -108,7 +110,7 @@ class Cosmology(object):
 
     def func(x, intp=interp1d(logx, y, 
             bounds_error=False, 
-            fill_value=np.nan, kind=5)):
+            fill_value=numpy.nan, kind=5)):
       return intp(numpy.log(x))
     func.__doc__ =  \
     """evaluates D+(a) There is no 2.5 factor neither.
@@ -152,7 +154,7 @@ class Cosmology(object):
     DH = 299792.468 / 100.
     fakesigma8 = pycamb.transfers(scalar_amp=1, **a)[2]
     scalar_amp = fakesigma8 ** -2 * self.sigma8 ** 2
-    k, p = pycamb.matter_power(scalar_amp=scalar_amp, maxk=10, **a)
+    k, p = pycamb.matter_power(scalar_amp=scalar_amp, maxk=500, **a)
     k *= DH
     p /= DH ** 3
     p[numpy.isnan(p)] = 0
