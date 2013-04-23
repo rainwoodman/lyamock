@@ -5,6 +5,10 @@
 #include <stdint.h>
 #include <math.h>
 
+typedef double (*kd_castfunc)(void * p);
+typedef int (*kd_enum_callback)(double r, ptrdiff_t i, ptrdiff_t j, void * data);
+
+
 typedef struct KDType {
 
 /* defining the input positions */
@@ -36,18 +40,16 @@ typedef struct KDType {
 
     /* the byte size of each position scalar, required */
     ptrdiff_t elsize;
-    /* diff returns distance of two scalars, in double,
-     * if p2 is NULL, cast p1 only */
-    double (* cast)(void * p1, void * data);
+    /* if cast p1 to double and return it */
+    double (* cast)(void * p1);
 
 /* memory allocation */
-    /* allocate memory */
+    /* allocate memory, NULL to use malloc() */
     void * (* malloc)(size_t size);
-    /* deallocate memory, size is passed in for a slab allocator */
+    /* deallocate memory, size is passed in for a slab allocator,
+     * NULL to use free() */
     void (* free)(size_t size, void * ptr);
 
-    /* data passed to cmp, middle, and diff */
-    void * userdata;
 } KDType;
 
 typedef struct KDNode {
@@ -61,7 +63,12 @@ typedef struct KDNode {
 } KDNode;
 
 static KDNode * kd_alloc(KDType * type) {
-    KDNode * ptr = (KDNode *)type->malloc(sizeof(KDType) + sizeof(double) * 2 * type->Nd);
+    KDNode * ptr;
+    if(type->malloc != NULL) {
+        ptr = (KDNode *)type->malloc(sizeof(KDType) + sizeof(double) * 2 * type->Nd);
+    } else {
+        ptr = (KDNode *)malloc(sizeof(KDType) + sizeof(double) * 2 * type->Nd);
+    }
     ptr->type = type;
     return ptr;
 }
@@ -78,7 +85,7 @@ static inline void * kd_ptr(KDType * type, ptrdiff_t i, ptrdiff_t d) {
     return & type->buffer[i * type->strides[0] + d * type->strides[1]];
 }
 static inline double kd_cast(KDType * type, void * p1) {
-    return type->cast(p1, type->userdata);
+    return type->cast(p1);
 }
 static inline double kd_data(KDType * type, ptrdiff_t i, ptrdiff_t d) {
     i = type->ind[i];
@@ -244,7 +251,11 @@ KDNode * kd_build(KDType * type) {
 KDNode * kd_free(KDNode * node) {
     if(node->link[0]) kd_free(node->link[0]);
     if(node->link[1]) kd_free(node->link[1]);
-    node->type->free(sizeof(KDNode) + node->type->elsize, node);
+    if(node->type->free == NULL) {
+        free(node);
+    } else {
+        node->type->free(sizeof(KDNode) + node->type->elsize, node);
+    }
 }
 
 static void kd_realdiff(KDType * type, double min, double max, double * realmin, double * realmax, int d) {
@@ -324,10 +335,8 @@ static inline void kd_collect(KDNode * node, double * ptr) {
     }
 
 }
-
 static void kd_enum_force(KDNode * node[2], double rmax2,
-        int (*callback)(
-          double r, ptrdiff_t i, ptrdiff_t j, void * data), void * data) {
+        kd_enum_callback callback, void * data) {
     ptrdiff_t i, j;
     int d;
     KDType * t0 = node[0]->type;
@@ -385,8 +394,7 @@ static void kd_enum_force(KDNode * node[2], double rmax2,
  * call callback.
  * */
 void kd_enum(KDNode * node[2], double maxr,
-        int (*callback)(
-          double r, ptrdiff_t i, ptrdiff_t j, void * data), void * data) {
+        kd_enum_callback callback, void * data) {
     int Nd = node[0]->type->Nd;
     double distmax = 0, distmin = 0;
     double rmax2 = maxr * maxr;
@@ -436,6 +444,33 @@ void kd_enum(KDNode * node[2], double maxr,
     }
 
     kd_enum_force(node, rmax2, callback, data);
-
 }
 
+/* this splits a kdtree to a series of nodes that are no more 
+ * bigger than thresh */
+static void kd_split_r(KDNode * node, ptrdiff_t thresh, KDNode *** out, ptrdiff_t * length, ptrdiff_t * size) {
+    if(node->size < thresh) {
+        if (*length >= *size) {
+            *size *= 2;
+            KDNode ** old = out[0];
+            out[0] = malloc(sizeof(void*) * *size);
+            ptrdiff_t i;
+            for(i = 0; i < *length; i++) {
+                out[0][i] = old[i]; 
+            }
+            free(old);
+        }
+        out[0][*length] = node;
+        *length = *length + 1;
+        return;
+    }
+    kd_split_r(node->link[0], thresh, out, length, size);
+    kd_split_r(node->link[1], thresh, out, length, size);
+}
+KDNode ** kd_split(KDNode * node, ptrdiff_t thresh, ptrdiff_t * length) {
+    ptrdiff_t size = 128;
+    KDNode ** out = malloc(sizeof(void*) * size);
+    * length = 0;
+    kd_split_r(node, thresh, &out, length, &size);
+    return out;
+}
