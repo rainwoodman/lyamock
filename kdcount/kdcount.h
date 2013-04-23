@@ -370,7 +370,7 @@ static void kd_enum_force(KDNode * node[2], double rmax2,
             }
             if(r2 <= rmax2) {
                 callback(pow(r2, 0.5), t0->ind[i + node[0]->start], 
-                        t1->ind[j + node[0]->start], data);
+                        t1->ind[j + node[1]->start], data);
             }
             p1 += Nd;
         }
