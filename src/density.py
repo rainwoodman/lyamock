@@ -1,9 +1,11 @@
 import numpy
+from scipy.ndimage import spline_filter
 
 def realize(PowerSpec,
             seed, Nmesh, Nsample, BoxSize, 
             NmeshCoarse=None,
-            kernel=lambda kx, ky, kz, k: 1):
+            kernel=lambda kx, ky, kz, k: 1,
+            order=False):
   """
       realize a powerspectrum.
       PowerSpec must be in gadget unit, (2 pi kpc/h) ** 3
@@ -53,7 +55,8 @@ def realize(PowerSpec,
   delta = numpy.fft.irfftn(gauss)
   # fix the fftpack normalization
   delta *= Nsample ** 3
-
+  if order is not False:
+    delta = spline_filter(delta, order=order)
   return numpy.float32(delta)
 
 def lognormal(delta, std=None, out=None):
@@ -71,7 +74,7 @@ def lognormal(delta, std=None, out=None):
 
 def realize_dispr(PowerSpec, cornerpos,
             seed, Nmesh, Nsample, BoxSize, 
-            NmeshCoarse=None):
+            NmeshCoarse=None, order=False):
   dispkernel = [
     lambda kx, ky, kz, k: 1j * kx * k ** -2,
     lambda kx, ky, kz, k: 1j * ky * k ** -2,
@@ -91,11 +94,13 @@ def realize_dispr(PowerSpec, cornerpos,
       disp[i][r!=0] /= r[r!=0]
       disp[i][r==0] = 0
     losdisp += disp
+  if order is not False:
+    losdisp = spline_filter(losdisp, order=order)
   return losdisp
 
 def realize_dispz(PowerSpec, cornerpos,
             seed, Nmesh, Nsample, BoxSize, 
-            NmeshCoarse=None):
+            NmeshCoarse=None, order=False):
   dispkernel = [
     lambda kx, ky, kz, k: 1j * kx * k ** -2,
     lambda kx, ky, kz, k: 1j * ky * k ** -2,
@@ -104,4 +109,7 @@ def realize_dispz(PowerSpec, cornerpos,
   losdisp = realize(PowerSpec, seed=seed, Nmesh=Nmesh, 
          Nsample=Nsample, BoxSize=BoxSize, NmeshCoarse=NmeshCoarse,
          kernel=dispkernel[ax])
-  return -losdisp
+  losdisp *= -1
+  if order is not False:
+    losdisp = spline_filter(losdisp, order=order)
+  return losdisp

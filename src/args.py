@@ -10,8 +10,10 @@ pixeldtype = numpy.dtype(
     [('delta', 'f4'), ('losdisp', 'f4'), ('row', 'i4'), ('ind', 'i4'), ('Z', 'f4')])
 
 pixeldtype2 = numpy.dtype(
-    [('F', 'f4'), ('losvel', 'f4'), ('row', 'i4'), ('ind', 'i4'), ('Z', 'f4')])
+    [('F', 'f4'), ('Zshift', 'f4'), ('row', 'i4'), ('ind', 'i4'), ('Z0', 'f4')])
 
+bitmapdtype = numpy.dtype([('Z', 'f4'), ('F', 'f4'), ('R', 'f4'), ('pos', ('f4',
+    3))])
 class Config(argparse.Namespace):
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("paramfile", 
@@ -27,6 +29,9 @@ class Config(argparse.Namespace):
                default=None)
     parser.add_argument("--serial",
                help="serial", action='store_true', default=False)
+    parser.add_argument("--no-redshift-distortion", dest='redshift_distortion', 
+               help="without redshift distortion", action='store_false',
+               default=True)
 
     def export(self, dict, names):
         for name in names:
@@ -45,11 +50,12 @@ class Config(argparse.Namespace):
 
         Seed = config.getint("IC", "Seed")
         BoxSize = config.getfloat("IC", "BoxSize")
-        Redshift = config.getfloat("IC", "Redshift")
         Nmesh = config.getint("IC", "Nmesh")
         NmeshEff = config.getint("IC", "NmeshEff")
         NLyaBox = config.getint("IC", "NLyaBox")
+        Npixel = config.getint("IC", "Npixel")
         Geometry = config.get("IC", "Geometry")
+        Redshift = config.getfloat("IC", "Redshift")
 
         assert Geometry in ['Sphere', 'Test']
 
@@ -58,7 +64,7 @@ class Config(argparse.Namespace):
 
         self.export(locals(), [
             'Seed', 'BoxSize', 'Redshift', 'Nmesh',
-            'NmeshEff', 'NLyaBox', 'Nrep', 'Geometry'])
+            'NmeshEff', 'NLyaBox', 'Nrep', 'Geometry', 'Npixel'])
 
         Sigma8 = config.getfloat("Cosmology", "Sigma8")
         OmegaM = config.getfloat("Cosmology", "OmegaM")
@@ -107,7 +113,7 @@ class Config(argparse.Namespace):
                     dtype=sightlinedtype).view(numpy.recarray)
             sightlines.Zmax = raw.Z_VI
             sightlines.Zmin = (raw.Z_VI + 1) * 1026. / 1216 - 1
-            sightlines.Zmin.clip(min=0, out=sightlines.Zmin)
+            sightlines.Zmin.clip(min=Redshift, out=sightlines.Zmin)
             raw.RA *= numpy.pi / 180
             raw.DEC *= numpy.pi / 180
             sightlines.x1[:, 0] = numpy.cos(raw.RA) * numpy.sin(raw.DEC)
@@ -125,9 +131,7 @@ class Config(argparse.Namespace):
             sightlines.x1 += BoxSize * 0.5
             sightlines.x2 += BoxSize * 0.5
         elif Geometry == 'Test':
-            NTestpix = config.getint("IC", 'NTestpix')
-            self.export(locals(), ['NTestpix'])
-            sightlines = numpy.empty(NTestpix ** 2, 
+            sightlines = numpy.empty(Npixel ** 2, 
                     dtype=sightlinedtype).view(numpy.recarray)
             Zmin = Redshift
             Dcmin = cosmology.Dc(1 / (Zmin + 1))
@@ -135,8 +139,8 @@ class Config(argparse.Namespace):
             sightlines.Zmax[...] = Zmax
             sightlines.Zmin[...] = Zmin
             x, y = \
-                    numpy.indices((NTestpix, NTestpix)).reshape(2, -1) \
-                    * (BoxSize / NTestpix)
+                    numpy.indices((Npixel, Npixel)).reshape(2, -1) \
+                    * (BoxSize / Npixel)
             sightlines.x1[:, 0] = x
             sightlines.x1[:, 1] = y
             sightlines.x1[:, 2] = 0
@@ -211,3 +215,17 @@ def loadpixel(args, i, j, k):
     rt['row'] = (i * Npix+ intpos[:, 0]) * args.Npix + j * Npix + intpos[:, 1]
     rt['ind'] = intpos[:, 2] + k * Npix
     return rt
+
+def writefill(fill, basename, stat=None):
+    fill.tofile(basename + '.raw')
+    if stat is not None:
+      K2 = (fill['delta'] ** 2).sum(dtype='f8')
+      K = fill['delta'].sum(dtype='f8')
+      N = fill['delta'].size
+      file(basename + '.info-file', mode='w').write(
+"""
+K2 = %(K2)g
+K = %(K)g
+N = %(N)g
+""" % locals())
+    print 'wrote', basename

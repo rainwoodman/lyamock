@@ -2,13 +2,20 @@ import numpy
 def splat(t, value, bins):
     """put value into bins according to t
        the points are assumed to be describing a continuum field,
-       thus no two points have the same position.
-       they are also supposed to be sorted.
+       if two points have the same position, they are merged into one point
 
        for points crossing the edge part is added to the left bin
        and part is added to the right bin.
        the sum is conserved.
     """
+    if len(t) == 0:
+        return numpy.zeros(len(bins) + 1)
+    t = numpy.float64(t)
+    t, label = numpy.unique(t, return_inverse=True)
+    if numpy.isscalar(value):
+        value = numpy.bincount(label) * value
+    else:
+        value = numpy.bincount(label, weights=value)
     edge = numpy.concatenate(([t[0]], (t[1:] + t[:-1]) * 0.5, [t[-1]]))
     dig = numpy.digitize(edge, bins)
     #use the right edge as the reference
