@@ -1,20 +1,17 @@
 import numpy
-from args import pixeldtype, pixeldtype2
+from args import pixeldtype1, pixeldtype2
 from args import writefill
 import sharedmem
 
 def main(A):
-  """ log normal transformation and redshift distortion"""
+  """ log normal transformation and convert to Flux """
   mean, std = normalization(A)
   Dplus = A.cosmology.Dplus
-  FOmega = A.cosmology.FOmega
-  Ea = A.cosmology.Ea
-  H0 = 0.1
   Dplus0 = Dplus(1.0)
   def work(i, j, k):
     try:
         fill1 = numpy.fromfile(A.basename(i, j, k, 'pass1') + '.raw',
-                pixeldtype)
+                pixeldtype1)
     except IOError:
         return
     fill2 = fill1.view(dtype=pixeldtype2)
@@ -22,13 +19,6 @@ def main(A):
     D = Dplus(a) / Dplus0
     fill1['delta'] = (fill1['delta'] - mean) * D
     lognormal(fill1['delta'], std=std * D, out=fill1['delta'])
-    losvel = a * D * FOmega(a) * Ea(a) * H0 * fill1['losdisp']
-    print 'losvel stat', losvel.max(), losvel.min()
-    # moving away is positive
-    dz = - losvel / A.C
-    fill2['Zshift'] = (1 + dz) * (1 + fill2['Z0']) - 1 - fill2['Z0']
-    print 'Z0', fill2['Z0'].max(), fill2['Z0'].min()
-    print 'Zshift', fill2['Zshift'].max(), fill2['Zshift'].min()
     fill2['F'] = numpy.exp(-numpy.exp(A.beta * fill1['delta']))
     writefill(fill2, A.basename(i, j, k, 'pass2')) 
 

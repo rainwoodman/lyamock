@@ -13,10 +13,12 @@ def main():
   if A.serial:
       sharedmem.set_debug(True)
 
+  if A.mode == 'check':
+    cmd.check.main(A)
   if A.mode == 'firstpass':
     cmd.gaussian.main(A)
   if A.mode == 'secondpass':
-    cmd.distort.main(A)
+    cmd.lognormal.main(A)
   if A.mode == 'thirdpass':
     cmd.meanfluxfactor.main(A)
   if A.mode == 'fourthpass':

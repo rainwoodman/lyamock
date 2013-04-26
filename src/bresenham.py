@@ -15,6 +15,10 @@ def clipline(x1, x2, dims, return_lineid=False):
        returns the index of the line and the index of the
        pixel in the line.
           return (X, Y, Z, ..), (Line, Pixel)
+
+          Wikipedia Liang-Barsky.
+
+          u is u / absdxpri
     """
 
     # parametrize along the primary axis
@@ -22,12 +26,12 @@ def clipline(x1, x2, dims, return_lineid=False):
     # 
     x1, x2 = numpy.atleast_2d(numpy.int32(x1), numpy.int32(x2))
     dims = numpy.int32(dims)
-    pri = numpy.abs(x2 - x1).argmax(axis=-1)
+    dx = x2 - x1
+    pri = numpy.abs(dx).argmax(axis=-1)
 
-    dxpri = numpy.atleast_1d(numpy.choose(pri, numpy.rollaxis(x2 - x1, -1)))
+    dxpri = numpy.atleast_1d(numpy.choose(pri, numpy.rollaxis(dx, -1)))
     absdxpri = numpy.abs(dxpri)
-    slope = (x2 - x1) * numpy.sign(dxpri)[:, None]
-
+    slope = dx * numpy.sign(dxpri)[:, None]
     Np = len(slope)
     Nd = slope.shape[-1]
 
@@ -39,8 +43,8 @@ def clipline(x1, x2, dims, return_lineid=False):
     q[..., 1] = dims - x1
     q *= absdxpri[..., None, None]
 
-    p[..., 0] = - slope
-    p[..., 1] = slope
+    p[..., 0] = - dx
+    p[..., 1] = dx
 
     qp = q / p
 

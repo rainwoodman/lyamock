@@ -6,14 +6,17 @@ import argparse
 from scipy.interpolate import interp1d
 from cosmology import Cosmology
 
-pixeldtype = numpy.dtype(
+pixeldtype0 = numpy.dtype(
     [('delta', 'f4'), ('losdisp', 'f4'), ('row', 'i4'), ('ind', 'i4'), ('Z', 'f4')])
 
+pixeldtype1 = numpy.dtype(
+    [('delta', 'f4'), ('Zshift', 'f4'), ('row', 'i4'), ('ind', 'i4'), ('Z0', 'f4')])
 pixeldtype2 = numpy.dtype(
     [('F', 'f4'), ('Zshift', 'f4'), ('row', 'i4'), ('ind', 'i4'), ('Z0', 'f4')])
 
 bitmapdtype = numpy.dtype([('Z', 'f4'), ('F', 'f4'), ('R', 'f4'), ('pos', ('f4',
-    3))])
+    3)), ('row', 'i4')])
+
 class Config(argparse.Namespace):
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("paramfile", 
@@ -23,10 +26,15 @@ class Config(argparse.Namespace):
        'thirdpass',
        'fourthpass',
        'fifthpass',
+       'check',
        ])
     parser.add_argument("--row",
                help="which row to do", type=int,
                default=None)
+    parser.add_argument("--usepass1",
+               help="use pass1 input in fifthpass, \
+                     thus the bitmap will be density", 
+               action='store_true', default=False)
     parser.add_argument("--serial",
                help="serial", action='store_true', default=False)
     parser.add_argument("--no-redshift-distortion", dest='redshift_distortion', 
@@ -38,6 +46,13 @@ class Config(argparse.Namespace):
             setattr(self, name, dict[name])
     def basename(self, i, j, k, post):
         return '%s/%02d-%02d-%02d-delta-%s' % (self.datadir, i, j, k, post)
+
+    def Z(self, pixels):
+        if self.redshift_distortion:
+            return pixels['Z0'] + pixels['Zshift']
+        else:
+            return pixels['Z0']
+
     def FPGAmeanflux(self, a):
         return numpy.exp(-10**(self.FitB + self.FitA * numpy.log10(a)))
 
@@ -73,20 +88,21 @@ class Config(argparse.Namespace):
         h = config.getfloat("Cosmology", "h")
         G = 43007.1
         C = 299792.458
-        H = 0.1
-        DH = C / H
+        H0 = 0.1
+        DH = C / H0
         cosmology = Cosmology(M=OmegaM, 
             L=OmegaL, B=OmegaB, h=h, sigma8=Sigma8)
 
         self.export(locals(), [
             'Sigma8', 'OmegaM', 'OmegaB', 'OmegaL',
-            'h', 'G', 'C', 'H', 'DH', 'cosmology'])
+            'h', 'G', 'C', 'H0', 'DH', 'cosmology'])
 
         beta = config.getfloat("FPGA", "beta")
         JeansScale = config.getfloat("FPGA", "JeansScale")
         FitA = config.getfloat("FPGA", "FitA")
         FitB = config.getfloat("FPGA", "FitB")
         NmeshLya = int(BoxSize / NmeshEff / JeansScale * 0.25) * 4
+        if NmeshLya < 1: NmeshLya = 1
         print 'High res Lya fluctuation is NmeshLya = ', NmeshLya
         print 'JeansScale is', JeansScale
 
@@ -116,9 +132,9 @@ class Config(argparse.Namespace):
             sightlines.Zmin.clip(min=Redshift, out=sightlines.Zmin)
             raw.RA *= numpy.pi / 180
             raw.DEC *= numpy.pi / 180
-            sightlines.x1[:, 0] = numpy.cos(raw.RA) * numpy.sin(raw.DEC)
-            sightlines.x1[:, 1] = numpy.sin(raw.RA) * numpy.sin(raw.DEC)
-            sightlines.x1[:, 2] = numpy.cos(raw.DEC)
+            sightlines.x1[:, 0] = numpy.cos(raw.RA) * numpy.cos(raw.DEC)
+            sightlines.x1[:, 1] = numpy.sin(raw.RA) * numpy.cos(raw.DEC)
+            sightlines.x1[:, 2] = numpy.sin(raw.DEC)
             sightlines.x2[...] = sightlines.x1
             Dcmin = cosmology.Dc(1 / (sightlines.Zmin + 1))[:, None]
             Dcmax = cosmology.Dc(1 / (sightlines.Zmax + 1))[:, None]
@@ -154,6 +170,9 @@ class Config(argparse.Namespace):
 
         Zmax = sightlines.Zmax.max()
         Zmin = sightlines.Zmin.min()
+
+        #sightlines = sightlines[50056:50057]
+
         self.export(locals(), [
             'datadir', 'sightlines', 'Zmax', 'Zmin'])
         print 'max Z is', Zmax, 'min Z is', Zmin

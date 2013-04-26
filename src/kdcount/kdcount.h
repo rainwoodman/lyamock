@@ -6,7 +6,14 @@
 #include <math.h>
 
 typedef double (*kd_castfunc)(void * p);
-typedef int (*kd_enum_callback)(void * data, double r, ptrdiff_t i, ptrdiff_t j);
+/* x and y points to the double position */
+typedef struct KDEnumData {
+    double r;
+    ptrdiff_t i;
+    ptrdiff_t j;
+} KDEnumData;
+
+typedef int (*kd_enum_callback)(void * data, KDEnumData * enumdata);
 
 
 typedef struct KDType {
@@ -50,6 +57,7 @@ typedef struct KDType {
      * NULL to use free() */
     void (* free)(size_t size, void * ptr);
     void * userdata;
+    ptrdiff_t total_nodes;
 } KDType;
 
 typedef struct KDNode {
@@ -75,6 +83,7 @@ static KDNode * kd_alloc(KDType * type) {
     ptr->link[0] = NULL;
     ptr->link[1] = NULL;
     ptr->type = type;
+    type->total_nodes ++;
     return ptr;
 }
 
@@ -231,6 +240,7 @@ KDNode * kd_build(KDType * type) {
     double min[type->Nd];
     double max[type->Nd];    
     int d;
+    type->total_nodes = 0;
     type->ind[0] = 0;
     for(d = 0; d < type->Nd; d++) {
         min[d] = kd_data(type, 0, d);
@@ -260,11 +270,11 @@ void kd_free0(KDType * type, size_t size, void * ptr) {
     } else {
         type->free(size, ptr);
     }
-
 }
 void kd_free(KDNode * node) {
     if(node->link[0]) kd_free(node->link[0]);
     if(node->link[1]) kd_free(node->link[1]);
+    node->type->total_nodes --;
     kd_free0(node->type, sizeof(KDNode) + node->type->elsize, node);
 }
 
@@ -359,6 +369,8 @@ static int kd_enum_force(KDNode * node[2], double rmax2,
     double * p1, * p0;
     double half[Nd];
     double full[Nd];
+    KDEnumData endata;
+
     if(t0->boxsize) {
         for(d = 0; d < Nd; d++) {
             half[d] = t0->boxsize[d] * 0.5;
@@ -371,6 +383,7 @@ static int kd_enum_force(KDNode * node[2], double rmax2,
 
     double bad = rmax2 * 2 + 1;
     for (p0 = p0base, i = 0; i < node[0]->size; i++) {
+        endata.i = t0->ind[i + node[0]->start];
         for (p1 = p1base, j = 0; j < node[1]->size; j++) {
             double r2 = 0.0;
             for (d = 0; d < Nd; d++){
@@ -388,8 +401,9 @@ static int kd_enum_force(KDNode * node[2], double rmax2,
                 r2 += dx * dx;
             }
             if(r2 <= rmax2) {
-                if(0 != callback(data, pow(r2, 0.5), t0->ind[i + node[0]->start], 
-                        t1->ind[j + node[1]->start])) return -1;
+                endata.j = t1->ind[j + node[1]->start];
+                endata.r = sqrt(r2);
+                if(0 != callback(data, &endata)) return -1;
             }
             p1 += Nd;
         }
@@ -429,7 +443,7 @@ int kd_enum(KDNode * node[2], double maxr,
     print(node[0]);
     print(node[1]);
     */
-    if (distmin > rmax2) {
+    if (distmin > rmax2 * 1.00001) {
         /* nodes are too far, skip them */
         return 0;
     }
@@ -467,7 +481,7 @@ int kd_enum(KDNode * node[2], double maxr,
  * bigger than thresh */
 static void kd_split_r(KDNode * node, ptrdiff_t thresh, KDNode *** out, ptrdiff_t * length, ptrdiff_t * size) {
 
-    if(node->size < thresh) {
+    if(node->size <= thresh || node->dim == -1) {
         if (*length >= *size) {
             KDNode ** old = out[0];
             out[0] = kd_malloc(node->type, sizeof(void*) * *size * 2);
@@ -475,16 +489,14 @@ static void kd_split_r(KDNode * node, ptrdiff_t thresh, KDNode *** out, ptrdiff_
             for(i = 0; i < *length; i++) {
                 out[0][i] = old[i]; 
             }
-            kd_free0(node->type, *size, old);
+            kd_free0(node->type, *size * sizeof(void*), old);
             *size *= 2;
         }
         out[0][*length] = node;
         *length = *length + 1;
         return;
     }
-    if(node->link[0])
     kd_split_r(node->link[0], thresh, out, length, size);
-    if(node->link[1])
     kd_split_r(node->link[1], thresh, out, length, size);
 }
 KDNode ** kd_split(KDNode * node, ptrdiff_t thresh, ptrdiff_t * length) {
@@ -494,10 +506,9 @@ KDNode ** kd_split(KDNode * node, ptrdiff_t thresh, ptrdiff_t * length) {
     kd_split_r(node, thresh, &out, length, &size);
     KDNode ** ret = kd_malloc(node->type, sizeof(void*) * *length);
     ptrdiff_t i;
-    for(i = 0; i < *length; i++) {
+    for(i = 0; i < * length; i++) {
         ret[i] = out[i]; 
     }
-      
     kd_free0(node->type, sizeof(void*) * size, out);
     return ret;
 }

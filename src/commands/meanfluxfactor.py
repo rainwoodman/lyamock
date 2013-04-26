@@ -20,9 +20,7 @@ def main(A):
         continue
       all = numpy.append(all, fill)
   all.tofile(A.datadir + '/pass3.raw')
-  Z = all['Z0'].copy()
-  if A.redshift_distortion == True:
-      Z += all['Zshift']
+  Z = A.Z(all)
   Fall = all['F'].copy()
   dig = numpy.digitize(Z, zbins)
   ind = dig.argsort()
