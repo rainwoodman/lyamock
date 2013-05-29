@@ -13,6 +13,8 @@ def main():
   if A.serial:
       sharedmem.set_debug(True)
 
+  if A.mode == 'sightlines':
+    cmd.sightlines.main(A)
   if A.mode == 'check':
     cmd.check.main(A)
   if A.mode == 'firstpass':
@@ -25,6 +27,8 @@ def main():
     cmd.normalize.main(A)
   if A.mode == 'fifthpass':
     cmd.rebin.main(A)
+  if A.mode == 'export':
+    cmd.export.main(A)
 
 main()
 

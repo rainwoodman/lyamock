@@ -4,7 +4,7 @@ import StringIO
 import ConfigParser
 import argparse
 from scipy.interpolate import interp1d
-from cosmology import Cosmology
+from cosmology import Cosmology, Lazy
 
 pixeldtype0 = numpy.dtype(
     [('delta', 'f4'), ('losdisp', 'f4'), ('row', 'i4'), ('ind', 'i4'), ('Z', 'f4')])
@@ -14,7 +14,7 @@ pixeldtype1 = numpy.dtype(
 pixeldtype2 = numpy.dtype(
     [('F', 'f4'), ('Zshift', 'f4'), ('row', 'i4'), ('ind', 'i4'), ('Z0', 'f4')])
 
-bitmapdtype = numpy.dtype([('Z', 'f4'), ('F', 'f4'), ('R', 'f4'), ('pos', ('f4',
+bitmapdtype = numpy.dtype([('Z', 'f4'), ('F', 'f4'), ('lambda', 'f4'), ('pos', ('f4',
     3)), ('row', 'i4')])
 
 class Config(argparse.Namespace):
@@ -27,6 +27,8 @@ class Config(argparse.Namespace):
        'fourthpass',
        'fifthpass',
        'check',
+       'export',
+       'sightlines',
        ])
     parser.add_argument("--row",
                help="which row to do", type=int,
@@ -63,23 +65,37 @@ class Config(argparse.Namespace):
         str = file(self.paramfile).read().replace(';', ',').replace('#', ';')
         config.readfp(StringIO.StringIO(str))
 
+        self.config = config
+
         Seed = config.getint("IC", "Seed")
         BoxSize = config.getfloat("IC", "BoxSize")
-        Nmesh = config.getint("IC", "Nmesh")
+        NmeshCoarse = config.getint("IC", "NmeshCoarse")
         NmeshEff = config.getint("IC", "NmeshEff")
+        Nrep = config.getint("IC", "Nrep")
         NLyaBox = config.getint("IC", "NLyaBox")
         Npixel = config.getint("IC", "Npixel")
         Geometry = config.get("IC", "Geometry")
         Redshift = config.getfloat("IC", "Redshift")
 
+        Observer = numpy.array([BoxSize * 0.5] * 3, dtype='f8')
         assert Geometry in ['Sphere', 'Test']
 
-        assert NmeshEff % Nmesh  == 0
-        Nrep = NmeshEff // Nmesh
+        assert NmeshEff % Nrep == 0
+        assert NmeshEff % NmeshCoarse == 0
+
+        NmeshFine = NmeshEff / Nrep
+
+        RNG = numpy.random.RandomState(Seed)
+        SeedTable = RNG.randint(1<<21 - 1, size=(Nrep,) * 3)
 
         self.export(locals(), [
-            'Seed', 'BoxSize', 'Redshift', 'Nmesh',
-            'NmeshEff', 'NLyaBox', 'Nrep', 'Geometry', 'Npixel'])
+            'Seed', 'RNG', 'SeedTable', 'BoxSize', 'Redshift', 'NmeshFine', 'NmeshCoarse',
+            'NmeshEff', 'NLyaBox', 'Nrep', 'Geometry', 'Npixel', 'Observer'])
+
+        print 'NmeshFine is', NmeshFine 
+        print 'Nrep is', Nrep, 'grid', BoxSize / Nrep
+        print 'NmeshEff is', NmeshEff, 'grid', BoxSize / NmeshEff
+        print 'NmeshCoarse is', NmeshCoarse, 'grid', BoxSize / NmeshCoarse
 
         Sigma8 = config.getfloat("Cosmology", "Sigma8")
         OmegaM = config.getfloat("Cosmology", "OmegaM")
@@ -97,104 +113,160 @@ class Config(argparse.Namespace):
             'Sigma8', 'OmegaM', 'OmegaB', 'OmegaL',
             'h', 'G', 'C', 'H0', 'DH', 'cosmology'])
 
+        QSOScale = config.getfloat("FPGA", "QSOscale")
         beta = config.getfloat("FPGA", "beta")
         JeansScale = config.getfloat("FPGA", "JeansScale")
         FitA = config.getfloat("FPGA", "FitA")
         FitB = config.getfloat("FPGA", "FitB")
+
         NmeshLya = int(BoxSize / NmeshEff / JeansScale * 0.25) * 4
+        NmeshQSO = int(BoxSize / Nrep / QSOScale * 0.25) * 4
         if NmeshLya < 1: NmeshLya = 1
-        print 'High res Lya fluctuation is NmeshLya = ', NmeshLya
+        if NmeshQSO < 1: NmeshQSO = 1
+
+        NmeshLyaEff = NmeshLya * NmeshEff
+        NmeshQSOEff = NmeshQSO * Nrep
+        print 'Lya Eff NmeshLyaEff = ', NmeshLyaEff, \
+                 BoxSize / NmeshLyaEff
         print 'JeansScale is', JeansScale
+        print 'NmeshQSOEff is', NmeshQSOEff, 'grid', BoxSize / NmeshQSOEff
 
         self.export(locals(), [
             'beta', 'JeansScale', 'FitA', 'FitB',
-            'NmeshLya'] )
+            'NmeshLya', 'NmeshLyaEff', 'QSOScale', 'NmeshQSO', 'NmeshQSOEff'] )
 
-
-        numpy.random.seed(Seed)
 
         datadir = config.get("IO", "datadir")
-        sightlinedtype = [('x1', ('f4', 3)),
-                       ('x2', ('f4', 3)),
-                       ('Zmax', 'f4'),
-                       ('Zmin', 'f4')]
-        if Geometry == 'Sphere':
-            linesfile = config.get("IO", 'sightlines')
-            raw = numpy.loadtxt(linesfile, usecols=(4, 5, 6, 0), 
-                      dtype=[('RA', 'f4'), 
-                             ('DEC', 'f4'), 
-                             ('Z_VI', 'f4'), 
+        self.export(locals(), ['datadir'])
+
+    @Lazy
+    def QSOpercentile(self):
+        """ returns a function evaluating 
+            QSO peak percentile at given R
+        """
+        config = self.config
+        try:
+            QSOdensity = config.get("FPGA", "QSOdensityfile")
+
+            zbins = numpy.load(QSOdensity)['bins']
+            count = numpy.load(QSOdensity)['count']
+            a = 1 / (zbins + 1.)
+            R = self.cosmology.Dc(a) * self.DH
+            V = numpy.diff(4. / 3. * numpy.pi * R ** 3)
+            percentile = count / V / (self.NmeshQSO * self.Nrep / self.BoxSize) ** 3 
+            return interp1d((R[1:] + R[:-1]) * .5, percentile, bounds_error=False,
+                fill_value=0.0)
+        except:
+            QLF = config.get("FPGA", "QLFfile")
+
+            z = numpy.load(QLF)['z']
+            density = numpy.load(QLF)['density']
+            a = 1 / (z + 1.)
+            R = self.cosmology.Dc(a) * self.DH
+            percentile = density / (self.NmeshQSO * self.Nrep / self.BoxSize) ** 3 
+            print percentile.max()
+            return interp1d(R, percentile, bounds_error=False, fill_value=0.0)
+
+    @Lazy
+    def power(self):
+        config = self.config
+        try:
+            power = config.get("Cosmology", "PowerSpectrum")
+        except ConfigParser.NoOptionError:
+            power = self.datadir + '/power.txt'
+        try:
+            k, p = numpy.loadtxt(power, unpack=True)
+            print 'using power from file ', power
+        except IOError:
+            print 'using power from pycamb, saving to ', power
+            Pk = self.cosmology.Pk
+            k = Pk.x / self.DH
+            p = Pk.y * self.DH ** 3 * (2 * numpy.pi) ** -3
+            numpy.savetxt(power, zip(k, p))
+
+        p[numpy.isnan(p)] = 0
+        power = interp1d(k, p, kind='linear', copy=True, 
+                         bounds_error=False, fill_value=0)
+        return power
+
+    @Lazy
+    def Zmin(self):
+        return self.sightlines.Zmin.min()
+
+    @Lazy
+    def Zmax(self):
+        return self.sightlines.Zmax.max()
+
+    @Lazy
+    def sightlines(self):
+        config = self.config
+        sightlinedtype = [('x1', ('f8', 3)),
+                       ('x2', ('f8', 3)),
+                       ('Z', 'f8'),
+                       ('Zmax', 'f8'),
+                       ('Zmin', 'f8')]
+        if self.Geometry == 'Sphere':
+            try:
+                linesfile = config.get("IO", 'sightlines')
+                raw = numpy.loadtxt(linesfile, usecols=(4, 5, 6, 0), 
+                      dtype=[('RA', 'f8'), 
+                             ('DEC', 'f8'), 
+                             ('Z_VI', 'f8'), 
                              ('THINGID', 'i8')]).view(numpy.recarray)
+            except ConfigParser.NoOptionError:
+                linesfile = self.datadir + '/QSOcatelog.txt'
+                raw = numpy.loadtxt(linesfile, usecols=(0, 1, 2), 
+                      dtype=[('RA', 'f8'), 
+                             ('DEC', 'f8'), 
+                             ('Z_VI', 'f8')
+                             ]).view(numpy.recarray)
             sightlines = numpy.empty(raw.size, 
                     dtype=sightlinedtype).view(numpy.recarray)
-            sightlines.Zmax = raw.Z_VI
+            sightlines.Z = raw.Z_VI
+            sightlines.Zmax = (raw.Z_VI + 1) * 1216. / 1216 - 1
             sightlines.Zmin = (raw.Z_VI + 1) * 1026. / 1216 - 1
-            sightlines.Zmin.clip(min=Redshift, out=sightlines.Zmin)
+            sightlines.Zmin[sightlines.Zmin<self.Redshift] = self.Redshift
+            sightlines.Zmax[sightlines.Zmax<self.Redshift] = self.Redshift
             raw.RA *= numpy.pi / 180
             raw.DEC *= numpy.pi / 180
             sightlines.x1[:, 0] = numpy.cos(raw.RA) * numpy.cos(raw.DEC)
             sightlines.x1[:, 1] = numpy.sin(raw.RA) * numpy.cos(raw.DEC)
             sightlines.x1[:, 2] = numpy.sin(raw.DEC)
             sightlines.x2[...] = sightlines.x1
-            Dcmin = cosmology.Dc(1 / (sightlines.Zmin + 1))[:, None]
-            Dcmax = cosmology.Dc(1 / (sightlines.Zmax + 1))[:, None]
+            Dcmin = self.cosmology.Dc(1 / (sightlines.Zmin + 1))[:, None]
+            Dcmax = self.cosmology.Dc(1 / (sightlines.Zmax + 1))[:, None]
 
             sightlines.x1 *= Dcmin
             sightlines.x2 *= Dcmax
-            sightlines.x1 *= DH
-            sightlines.x2 *= DH
+            sightlines.x1 *= self.DH
+            sightlines.x2 *= self.DH
              
-            sightlines.x1 += BoxSize * 0.5
-            sightlines.x2 += BoxSize * 0.5
-        elif Geometry == 'Test':
+            sightlines.x1 += self.BoxSize * 0.5
+            sightlines.x2 += self.BoxSize * 0.5
+        elif self.Geometry == 'Test':
             sightlines = numpy.empty(Npixel ** 2, 
                     dtype=sightlinedtype).view(numpy.recarray)
-            Zmin = Redshift
-            Dcmin = cosmology.Dc(1 / (Zmin + 1))
-            Zmax = 1 / cosmology.aback(Dcmin + BoxSize / DH) - 1
+            Zmin = self.Redshift
+            Dcmin = self.cosmology.Dc(1 / (Zmin + 1))
+            Zmax = 1 / self.cosmology.aback(Dcmin + self.BoxSize / self.DH) - 1
             sightlines.Zmax[...] = Zmax
             sightlines.Zmin[...] = Zmin
             x, y = \
-                    numpy.indices((Npixel, Npixel)).reshape(2, -1) \
-                    * (BoxSize / Npixel)
+                    numpy.indices((self.Npixel, self.Npixel)).reshape(2, -1) \
+                    * (self.BoxSize / self.Npixel)
             sightlines.x1[:, 0] = x
             sightlines.x1[:, 1] = y
             sightlines.x1[:, 2] = 0
             sightlines.x2[...] = sightlines.x1 
-            sightlines.x2[:, 2] = BoxSize
+            sightlines.x2[:, 2] = self.BoxSize
 
-        assert (sightlines.x1 >= 0).all()
-        assert (sightlines.x1 <= BoxSize).all()
-        assert (sightlines.x2 >= 0).all()
-        assert (sightlines.x2 <= BoxSize).all()
+        assert (sightlines.x1 + 1>= 0).all()
+        assert (sightlines.x1 - 1<= self.BoxSize).all()
+        assert (sightlines.x2 + 1>= 0).all()
+        assert (sightlines.x2 - 1<= self.BoxSize).all()
 
-        Zmax = sightlines.Zmax.max()
-        Zmin = sightlines.Zmin.min()
+        return sightlines
 
-        #sightlines = sightlines[50056:50057]
-
-        self.export(locals(), [
-            'datadir', 'sightlines', 'Zmax', 'Zmin'])
-        print 'max Z is', Zmax, 'min Z is', Zmin
-
-        try:
-            power = config.get("Cosmology", "PowerSpectrum")
-        except ConfigParser.NoOptionError:
-            power = datadir + '/power.txt'
-        try:
-            k, p = numpy.loadtxt(power, unpack=True)
-            print 'using power from file ', power
-        except IOError:
-            print 'using power from pycamb, saving to ', power
-            Pk = cosmology.Pk
-            k = Pk.x / DH
-            p = Pk.y * DH ** 3 * (2 * numpy.pi) ** -3
-            numpy.savetxt(power, zip(k, p))
-
-        p[numpy.isnan(p)] = 0
-        power = interp1d(k, p, kind='linear', copy=True, 
-                         bounds_error=False, fill_value=0)
-        self.export(locals(), ['power'])
 
     def yieldwork(self):
         if self.row is not None:

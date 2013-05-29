@@ -6,17 +6,17 @@ import kdcount
 BoxSize = 12120000.
 #BoxSize = 500000.
 Npix = 80
-LargeScale = 140000.0
+LargeScale = 50000.0
 bitmap = numpy.fromfile('bitmap.raw', dtype=bitmapdtype)
-bitmap = bitmap.reshape(-1, Npix)[::1]
+bitmap = bitmap.reshape(-1, Npix)
 bad = numpy.isnan(bitmap['F']).any(axis=-1)
 bitmap = bitmap[~bad].reshape(-1).ravel()
-good = (bitmap['Z'] > 1.75) & (bitmap['Z'] < 3.0)
+#good = (bitmap['Z'] > 2.0) & (bitmap['Z'] < 3.0)
 bitmap = bitmap[good]
 #good2 = ((bitmap['pos'] - bitmap['pos'][192336]) ** 2).sum(axis=-1) < 2 * 18000.0 ** 2
 #bitmap = bitmap[good2]
 mubins = numpy.linspace(0.0, 1.0, 10, endpoint=False)
-rbins = numpy.linspace(2000, LargeScale, 16, endpoint=False)
+rbins = numpy.linspace(2000, LargeScale, 64, endpoint=False)
 
 C = numpy.zeros((rbins.size + 1, mubins.size + 1) , dtype='i8')
 W = numpy.zeros((rbins.size + 1, mubins.size + 1) , dtype='f8')

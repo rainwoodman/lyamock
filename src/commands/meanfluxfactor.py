@@ -14,8 +14,8 @@ def main(A):
   all = numpy.array([], dtype=pixeldtype2)
   for i, j, k in A.yieldwork():
       try:
-        fill = numpy.memmap(A.basename(i, j, k, 'pass2') +
-              '.raw', mode='r', dtype=pixeldtype2)
+        fill = numpy.fromfile(A.basename(i, j, k, 'pass2') +
+              '.raw', dtype=pixeldtype2)
       except IOError:
         continue
       all = numpy.append(all, fill)
