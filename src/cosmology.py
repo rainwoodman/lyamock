@@ -31,14 +31,14 @@ class interp1d(InterpolatedUnivariateSpline):
     self.xmax = self.x[-1]
     self.fill_value = fill_value
     self.bounds_error = bounds_error
-  def __call__(self, x):
+  def __call__(self, x, nu=0):
     x = numpy.asarray(x)
     shape = x.shape
     x = x.ravel()
     bad = (x > self.xmax) | (x < self.xmin)
     if self.bounds_error and numpy.any(bad):
       raise ValueError("some values are out of bounds")
-    y = InterpolatedUnivariateSpline.__call__(self, x.ravel())
+    y = InterpolatedUnivariateSpline.__call__(self, x.ravel(), nu=nu)
     y[bad] = self.fill_value
     return y.reshape(shape)
  
@@ -81,11 +81,11 @@ class Cosmology(object):
     y = self.Dc.x[::-1]
     x = self.Dc.y[::-1]
     assert (x[1:] > x[:-1]).all()
-    def func(xval, 
+    def func(xval, nu=0,
             intp=interp1d(x, y, 
                bounds_error=True, 
                fill_value=numpy.nan, kind=5)):
-      return intp(xval)
+      return intp(xval, nu=nu)
     func.__doc__ = \
     """evaluates look-back time 
        (in terms of expansion factor a)
@@ -108,10 +108,10 @@ class Cosmology(object):
                  [ romberg(kernel, logx.min(), loga, vec_func=True) 
                    for loga in logx])
 
-    def func(x, intp=interp1d(logx, y, 
+    def func(x, nu=0, intp=interp1d(logx, y, 
             bounds_error=False, 
             fill_value=numpy.nan, kind=5)):
-      return intp(numpy.log(x))
+      return intp(numpy.log(x), nu=nu)
     func.__doc__ =  \
     """evaluates D+(a) There is no 2.5 factor neither.
        (dimensionless, not multiplied by H0)

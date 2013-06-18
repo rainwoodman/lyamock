@@ -1,30 +1,35 @@
 import numpy
-from args import pixeldtype1, pixeldtype2
-from args import writefill
+from args import pixeldtype
+from density import lognormal
 import sharedmem
 
 def main(A):
   """ log normal transformation and convert to Flux """
-  mean, std = normalization(A)
   Dplus = A.cosmology.Dplus
   Dplus0 = Dplus(1.0)
-  def work(i, j, k):
-    try:
-        fill1 = numpy.fromfile(A.basename(i, j, k, 'pass1') + '.raw',
-                pixeldtype1)
-    except IOError:
-        return
-    fill2 = fill1.view(dtype=pixeldtype2)
-    a = 1 / (1 + fill1['Z'])
-    D = Dplus(a) / Dplus0
-    fill1['delta'] = (fill1['delta'] - mean) * D
-    lognormal(fill1['delta'], std=std * D, out=fill1['delta'])
-    fill2['F'] = numpy.exp(-numpy.exp(A.beta * fill1['delta']))
-    writefill(fill2, A.basename(i, j, k, 'pass2')) 
+  delta = A.P('delta')
+  print 'gaussian field', len(delta), 'pixels', 
+  var = numpy.loadtxt(A.datadir + '/gaussian-variance.txt')
+  std = var ** 0.5
+  print 'std=', std
+  # pixels shall be over dense
+  print 'sample mean =', delta.mean()
+  print 'sample std =', delta.var()
+  chunksize = 1048576
+  Zreal = A.P('Zreal', memmap='r')
+  flux = A.P('rawflux', justfile='w')
+  for i in range(0, len(delta), chunksize):
+      SL = slice(i, i + chunksize)
+      a = 1 / (1 + Zreal[SL])
+      D = Dplus(a) / Dplus0
+      d = (delta[SL]) * D
+      d = lognormal(d, std=std * D)
+      f = numpy.exp(-numpy.exp(A.beta * d)),
+      f = numpy.array(f, dtype=pixeldtype['rawflux'])
+      f.tofile(flux)
+      flux.flush()
 
-  with sharedmem.Pool() as pool:
-    pool.starmap(work, list(A.yieldwork()))
-
+"""
 def normalization(A):
   K1sum = 0.0
   K2sum = 0.0
@@ -42,3 +47,4 @@ def normalization(A):
   std = (K2sum / Nsum - mean ** 2) ** 0.5
   print 'mean is', mean, 'std is', std
   return mean, std
+"""

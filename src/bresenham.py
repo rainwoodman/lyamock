@@ -1,6 +1,6 @@
 import numpy
 
-def clipline(x1, x2, dims, return_lineid=False):
+def clipline(x1, x2, dims, return_full=True, return_lineid=False):
     """return integer positions
        of line from x1 to x2 on a grid of size dims.
 
@@ -8,6 +8,10 @@ def clipline(x1, x2, dims, return_lineid=False):
        pixels are weighted on their topleft corner.
 
        x1 is a row vector and x2 is a row vector.
+       if return_full == False,
+          returns total number of intersecting pixels per line
+       otherwise, continue reading:
+
        returns a column vector.
           return X, Y, Z, ....
 
@@ -61,6 +65,10 @@ def clipline(x1, x2, dims, return_lineid=False):
     excl = ((p == 0) & (q < 0)).any(axis=(-1, -2)) | (dxpri == 0)
     u1[excl] = u2[excl] + 1
     size[u1 <= u2] = (u2 + 1 - u1)[u1 <= u2]
+
+    if not return_full:
+        return size
+
     #delete unused variables, leaving memory for result
     offset = numpy.concatenate(([0], size.cumsum()[:-1]))
 #    p, q, qp, u2 = None, None, None, None

@@ -5,7 +5,8 @@ from snakefill import snakefill
 
 def realize(PowerSpec,
             seed, Nsample, BoxSize, 
-            CutOff=None,
+            Kmin=None,
+            Kmax=None,
             kernel=lambda kx, ky, kz, k: 1,
             order=False):
   """
@@ -17,11 +18,11 @@ def realize(PowerSpec,
       to get displacement field, use
       lambda kx, ky, kz, k: I * kx * k ** -2
 
-      if CutOff is not None, leave out a region of
-      [ - CutOff, CutOff], 
+      if Kmin is not None, leave out a region of
+      [ - Kmin, Kmin], 
       in the middle of the power spectrum,
 
-      In integer, this is CutOff / K0, where
+      In integer, this is Kmin / K0, where
       K0 = 2 pi / BoxSize
 
       presumbaly power from region will be added as large
@@ -29,13 +30,14 @@ def realize(PowerSpec,
   """
   rng = numpy.random.RandomState(seed)
   K0 = 2 * numpy.pi / BoxSize
+  A = snakefill((Nsample, Nsample, Nsample / 2 + 1))
+  A = A.ravel().argsort()
   gauss = rng.normal(scale=2 ** -0.5, 
             size=(Nsample, Nsample, Nsample / 2 + 1, 2)
           ).view(dtype=numpy.complex128).reshape(Nsample, Nsample, Nsample / 2 + 1)
-  A = snakefill(gauss)
   deltak = numpy.empty_like(gauss)
-  deltak.ravel()[A.ravel().argsort()] = gauss.ravel()
-  del gauss
+  deltak.ravel()[A] = gauss.ravel()
+  del gauss, A
   #deltak = gauss
   # convolve gauss with powerspec to delta_k, stored in deltak.
   for i in range(Nsample):
@@ -46,34 +48,43 @@ def realize(PowerSpec,
     K = numpy.empty((Nsample, Nsample/2 + 1), dtype='f4')
     K[...] = (i ** 2 + j ** 2 + k ** 2) ** 0.5 * K0
     PK = PowerSpec(K) ** 0.5
+    if Kmin:
+      # digging the hole
+      lowcut = K >= Kmin
+      #1 - numpy.exp( - (K / Kmin) ** 2)
+   #   thresh = Kmin / K0
+   #   if i < thresh and i > - thresh:
+   #     mask = (j < thresh) & (k < thresh) & \
+   #            (j > - thresh) & (k > -thresh)
+   #     deltak[i][mask] = 0
+      deltak[i] *= lowcut
+    if Kmax:
+      highcut = K <= Kmax
+      #numpy.exp( - (K / Kmax) ** 2)
+      deltak[i] *= highcut
     deltak[i] *= (PK * K0 ** 1.5) * kernel(i * K0, j * K0, k * K0, K)
     deltak[i][numpy.isnan(deltak[i])] = 0
-    if CutOff:
-      thresh = CutOff / K0
-      if i < thresh and i > - thresh:
-        mask = (j < thresh) & (k < thresh) & \
-               (j > - thresh) & (k > -thresh)
-        deltak[i][mask] = 0
   
   deltak[Nsample / 2, ...] = 0
   deltak[:, Nsample / 2, :] = 0
   deltak[:, :, Nsample / 2] = 0
 
   delta = numpy.fft.irfftn(deltak)
+  del deltak
   # fix the fftpack normalization
   delta *= Nsample ** 3
+  var = delta.var()
   if order is not False:
     delta = spline_filter(delta, order=order)
-  return numpy.float32(delta)
+  return numpy.float32(delta), var
 
-def lognormal(delta, std=None, out=None):
+def lognormal(delta, std, out=None):
+    """mean(delta)  shall be zero"""
     # lognormal transformation
     if out is None:
       out = delta.copy()
     else:
       out[...] = delta
-    if std is None:
-      std = (out ** 2).mean() ** 0.5
     out -= std * std * 0.5
     numpy.exp(out, out=out)
     out -= 1  
@@ -81,27 +92,28 @@ def lognormal(delta, std=None, out=None):
 
 def realize_dispr(PowerSpec, cornerpos, observerpos,
         seed, Nsample, BoxSize, 
-        CutOff=None, order=False):
+        Kmin=None, Kmax=None, order=False):
     dispkernel = [
             lambda kx, ky, kz, k: 1j * kx * k ** -2,
             lambda kx, ky, kz, k: 1j * ky * k ** -2,
             lambda kx, ky, kz, k: 1j * kz * k ** -2]
     losdisp = numpy.zeros((Nsample, Nsample, Nsample), dtype='f4')
     for ax in range(3):
-        disp = realize(PowerSpec, seed=seed,  
+        disp, var = realize(PowerSpec, seed=seed,  
               Nsample=Nsample, BoxSize=BoxSize, 
-              CutOff=CutOff,
+              Kmin=Kmin, Kmax=Kmax,
               kernel=dispkernel[ax])
         for i in range(Nsample):
             j, k = numpy.ogrid[0:Nsample, 0:Nsample]
-        x = cornerpos[0] + i * BoxSize - observerpos[0]
-        y = cornerpos[1] + j * BoxSize - observerpos[1]
-        z = cornerpos[2] + k * BoxSize - observerpos[2]
-        disp[i] *= ([-x, -y, -z][ax])
-        r = (x ** 2 + y ** 2 + z ** 2) ** 0.5
-        disp[i][r!=0] /= r[r!=0]
-        disp[i][r==0] = 0
+            x = cornerpos[0] + i * BoxSize - observerpos[0]
+            y = cornerpos[1] + j * BoxSize - observerpos[1]
+            z = cornerpos[2] + k * BoxSize - observerpos[2]
+            disp[i] *= ([-x, -y, -z][ax])
+            r = (x ** 2 + y ** 2 + z ** 2) ** 0.5
+            disp[i][r!=0] /= r[r!=0]
+            disp[i][r==0] = 0
         losdisp += disp
+        del disp
 
     if order is not False:
         losdisp = spline_filter(losdisp, order=order)
@@ -109,16 +121,16 @@ def realize_dispr(PowerSpec, cornerpos, observerpos,
 
 def realize_dispz(PowerSpec, cornerpos, observerpos,
             seed, Nsample, BoxSize, 
-            CutOff=None, order=False):
+            Kmin=None, Kmax=None, order=False):
     """ observerpos is unused."""
     dispkernel = [
       lambda kx, ky, kz, k: 1j * kx * k ** -2,
       lambda kx, ky, kz, k: 1j * ky * k ** -2,
       lambda kx, ky, kz, k: 1j * kz * k ** -2]
     ax = 2
-    losdisp = realize(PowerSpec, seed=seed, 
+    losdisp, var = realize(PowerSpec, seed=seed, 
            Nsample=Nsample, 
-           BoxSize=BoxSize, CutOff=CutOff,
+           BoxSize=BoxSize, Kmin=Kmin, Kmax=Kmax,
            kernel=dispkernel[ax])
     losdisp *= -1
     if order is not False:

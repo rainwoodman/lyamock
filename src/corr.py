@@ -2,7 +2,7 @@ import numpy
 import sharedmem
 from gaepsi.compiledbase.tree import Tree
 from scipy.integrate import simps
-from args import *
+
 BoxSize = 2000000
 def fixgrid(Pall, NmeshEff, Nmesh):
   Nrep = NmeshEff / Nmesh
@@ -68,7 +68,7 @@ def corr(tree, value, start, end, bins):
   return r, c, N[1:-1]
 
 def corrfrompower(K, P, logscale=False, R=None):
-  mask = ~isnan(P) & (K > 0)
+  mask = ~numpy.isnan(P) & (K > 0)
   K = K[mask]
   P = P[mask]
   P = P * (2 * numpy.pi) ** 3 # going from GADGET to xiao

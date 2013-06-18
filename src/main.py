@@ -15,20 +15,18 @@ def main():
 
   if A.mode == 'sightlines':
     cmd.sightlines.main(A)
-  if A.mode == 'check':
-    cmd.check.main(A)
-  if A.mode == 'firstpass':
+  if A.mode == 'gaussian':
     cmd.gaussian.main(A)
-  if A.mode == 'secondpass':
+  if A.mode == 'lognormal':
     cmd.lognormal.main(A)
-  if A.mode == 'thirdpass':
-    cmd.meanfluxfactor.main(A)
-  if A.mode == 'fourthpass':
-    cmd.normalize.main(A)
-  if A.mode == 'fifthpass':
-    cmd.rebin.main(A)
+  if A.mode == 'matchmeanflux':
+    cmd.matchmeanflux.main(A)
+  if A.mode == 'makespectra':
+    cmd.makespectra.main(A)
   if A.mode == 'export':
     cmd.export.main(A)
+  if A.mode == 'qsocorr':
+    cmd.qsocorr.main(A)
 
 main()
 

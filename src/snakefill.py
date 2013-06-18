@@ -1,9 +1,9 @@
 import numpy
 
-def snakefill(array):
+def snakefill(shape):
     """ return the snake fill index of an array.
 
-        array.shape must be even.
+        shape must be even.
 
         along the first Ndim - 1 axes,
         k_d goes from 0 ..., N / 2, - N / 2 + 1, ... -1.
@@ -17,9 +17,9 @@ def snakefill(array):
         for the flatened array, use
         snakefill(array).flat.argsort()
     """
-    A = numpy.zeros(array.shape, 'i8')
+    A = numpy.zeros(shape, 'i8')
     istart = 0
-    for n in range(array.shape[0] // 2 + 1):
+    for n in range(shape[0] // 2 + 1):
         istart = makeseq(n, A, istart)
     return A
 

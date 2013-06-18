@@ -1,14 +1,22 @@
 import numpy
 import density
-from args import pixeldtype0, pixeldtype1, writefill
+from args import pixeldtype
 from bresenham import clipline
 from scipy.ndimage import map_coordinates
 import sharedmem
-
+import time
+   
 def main(A):
     """ raw guassian field"""
     global realize_losdisp
     global deltalya
+    global delta0, losdisp0
+    global F
+
+    F= {}
+    for field in pixeldtype.fields:
+        F[field] = A.P(field, justfile='w')
+
 
     if A.Geometry == 'Test':
         realize_losdisp = density.realize_dispz
@@ -20,21 +28,25 @@ def main(A):
     print 'using', len(A.sightlines), 'sightlines'
     print 'preparing large scale modes'
   
-    delta0 = density.realize(A.power, 
+    delta0, var0 = density.realize(A.power, 
                    A.Seed, 
                    A.NmeshCoarse, 
-                   A.BoxSize, order=3)
+                   A.BoxSize, order=4,
+                   Kmax=A.KSplit)
     losdisp0 = realize_losdisp(A.power, 
                  [0, 0, 0], A.Observer,
                  A.Seed, A.NmeshCoarse,
-                 A.BoxSize, order=3)
+                 A.BoxSize, order=4,
+                 Kmax=A.KSplit)
   
+    print 'coarse field var', var0
     print 'preparing LyaBoxes'
   
     # fill the lya resolution small boxes
-    deltalya = numpy.zeros((A.NLyaBox, 
+    deltalya = sharedmem.empty((A.NLyaBox, 
         A.NmeshLya, A.NmeshLya, A.NmeshLya))
   
+    deltalya[:] = 0
     if A.NmeshLya > 1:
         # this is the kernel to correct for log normal transformation
         # as it matters when we get to near the JeansScale
@@ -43,139 +55,154 @@ def main(A):
             return f2
   
         cutoff = 0.5 * 2 * numpy.pi / A.BoxSize * A.NmeshEff
-        for i in range(A.NLyaBox):
-            seed = numpy.random.randint(1<<21 - 1)
-            deltalya[i] = density.realize(A.power, 
-                    seed,
+        seed = A.RNG.randint(1<<21 - 1, size=A.NLyaBox)
+        def work(i):
+            deltalya[i], varjunk = density.realize(A.power, 
+                    seed[i],
                     A.NmeshLya, 
                     A.BoxSize / A.NmeshEff, 
-                    CutOff=cutoff,
+                    Kmin=cutoff,
                     kernel=kernel)
-  
+        with sharedmem.Pool(use_threads=False) as pool:
+            pool.map(work, range(A.NLyaBox))
+
+    print 'lya field', 'mean', deltalya.mean(), 'var', deltalya.var()
     print 'spawn and work on intermediate scales'
 
-    # skip the bad lines
-    mask = A.sightlines.Zmin < A.sightlines.Zmax
-    x1 = A.sightlines.x1[mask] / A.BoxSize * A.NmeshLyaEff
-    x2 = A.sightlines.x2[mask] / A.BoxSize * A.NmeshLyaEff
+    time.clock()
 
     with sharedmem.Pool(use_threads=False) as pool:
         def work(i, j, k):
-            process_box(A, i, j, k, 
-                    delta0, losdisp0, 
-                    x1, x2, mask.nonzero()[0])
-        pool.starmap(work, list(A.yieldwork()))
+            var1, w1 = process_box(A, i, j, k, pool)
+            return var1, w1
+        rt = pool.starmap(work, A.yieldwork())
+    var1 = numpy.average(
+            [r[0] for r in rt],
+            weights=[r[1] for r in rt])
 
+    print 'fine field var', var1
+    var = var0 + var1 + deltalya.var()
+    print 'gaussian-variance is', var
+    numpy.savetxt(A.datadir + '/gaussian-variance.txt', [var])
 
-def process_box(A, i, j, k, delta0, losdisp0,
-        x1, x2, usedlines):
-    offset = numpy.array([i, j, k], dtype='f8') / A.Nrep * A.NmeshLyaEff
+def process_box(A, i, j, k, pool):
+    """ this will return number of pixels, variance of delta1, and w
+    where w is 0 if no fft on delta1 is done, and 1 if fft is done.
+    idea is we add up variance of delta0, delta1 and lya to get the
+    full variance.
+    """
+    offset = numpy.array([i, j, k], dtype='f8')
+    x1 = A.sightlines.x1 * (A.NmeshLyaEff / A.BoxSize) \
+         - offset[None, :] * (A.NmeshLyaEff / A.Nrep)
+    x2 = A.sightlines.x2 * (A.NmeshLyaEff / A.BoxSize) \
+         - offset[None, :] * (A.NmeshLyaEff / A.Nrep)
     
     # xyz is in lya coordinate, relative to the current box
-    xyz, lineid, pixelid = clipline(x1 - offset[None, :], x2 - offset[None, :], 
+    t = time.clock()
+    mask = clipline(x1, x2, 
                 (A.NmeshLyaEff / A.Nrep,) * 3, 
-                return_lineid=True)
+                return_full=False) > 0
+    #print i, j, k, 'clipping took', time.clock() - t
+    mask &= A.sightlines.Zmax > A.sightlines.Zmin
+    if not mask.any(): return 0, 0
 
-    if lineid.size == 0: 
-        return numpy.array([])
+    truelineid = mask.nonzero()[0]
 
-    # pixels contains the pixels in this box, of all lines.
-    pixels = numpy.empty(lineid.size, dtype=pixeldtype0)
+    t = time.clock()
 
-    # recover the original lineid as it has been masked
-    pixels['row'] = usedlines[lineid]
-    pixels['ind'] = pixelid
-
-    del [lineid, pixelid]
-
-    pixels['delta'] = 0
-    pixels['losdisp'] = 0
-
-    def blend_pixels0(pixels, xyz):
-        """ this will blend in the coarse mesh """
-        # first convert to the coarse coordinate
-        # relative to the global box
-        xyz = (xyz + offset[:, None]) * \
-                (1. * A.NmeshCoarse / A.NmeshLyaEff)
-
-        pixels['delta'] += map_coordinates(delta0, xyz, 
-                mode='wrap', order=3, prefilter=False)
-        pixels['losdisp'] += map_coordinates(losdisp0, xyz, 
-                mode='wrap', order=3, prefilter=False)
-
-        # now goto the box coordinate
-        xyz *= A.BoxSize / A.NmeshCoarse
-        if A.Geometry == 'Test':
-            R = xyz[2].copy()
-            # offset by the redshift
-            R += A.cosmology.Dc(1 / (A.Redshift + 1)) * A.DH
-        elif A.Geometry == 'Sphere':
-            R = ((xyz - A.Observer[:, None]) ** 2).sum(axis=0) ** 0.5
-        else:
-            raise Exception('Geometry unknown')
-
-        R /= A.DH
-        pixels['Z'] = 1 / A.cosmology.aback(R) - 1
-
-    for ch in range(0, len(xyz.T), 4096):
-        SL = slice(ch, ch + 4096)
-        blend_pixels0(pixels[SL], xyz[:, SL])
-  
-    if A.Nrep > 1:
-        process_box_fine(A, i, j, k, pixels, xyz)
-
-    # actually, we are writing out pixeldtype1, losdisp saves Zshift
-    pixels['losdisp'] = Zdistort(A, pixels['Z'], pixels['losdisp'])
-
-    writefill(pixels, A.basename(i, j, k, 'pass1'), stat='delta')
-
-def process_box_fine(A, i, j, k, pixels, xyz):
-
-    # add in the small scale power
-    cutoff = 0.5 * 2 * numpy.pi / A.BoxSize * A.NmeshCoarse
-    delta1 = density.realize(A.power, 
-               A.SeedTable[i, j, k], 
-               A.NmeshFine, 
-               A.BoxSize / A.Nrep, 
-               CutOff=cutoff, order=3)
-    offset = numpy.array([i, j, k], dtype='f8')[:, None] / A.Nrep * A.BoxSize
-
-    losdisp1 = realize_losdisp(A.power, offset,
+    losdisp1 = realize_losdisp(A.power, 
+               offset * (A.BoxSize / A.Nrep),
                A.Observer,
                A.SeedTable[i, j, k], A.NmeshFine,
-               A.BoxSize / A.Nrep, CutOff=cutoff, order=3)
+               A.BoxSize / A.Nrep, Kmin=A.KSplit, order=False)
 
-    rng = numpy.random.RandomState(A.SeedTable[i, j, k])
-    Lyatable = rng.randint(A.NLyaBox, size=A.NmeshFine ** 3)
+    delta1, var1 = density.realize(A.power, 
+           A.SeedTable[i, j, k], 
+           A.NmeshFine, 
+           A.BoxSize / A.Nrep, 
+           Kmin=A.KSplit, order=False)
+
+    RNG = numpy.random.RandomState(A.SeedTable[i, j, k])
+    Lyatable = RNG.randint(A.NLyaBox, size=A.NmeshFine ** 3)
+    #print i, j, k, 'fft took', time.clock() - t
+
+    # doing 1024 lines a time
+    for chunk in numpy.array_split(truelineid, 
+               len(truelineid) / 5000 + 1):
+
+        xyzlya, rellineid, pixelid = clipline(x1[chunk], x2[chunk], 
+                    (A.NmeshLyaEff / A.Nrep,) * 3, 
+                     return_lineid=True)
+    
+        assert len(rellineid) > 0
+
+        # pixels contains the pixels in this box, of all lines.
+        pixels = numpy.empty(len(rellineid), dtype=pixeldtype)
+
+        t = time.clock()
+        # recover the original lineid as it has been masked
+        pixels['objectid'] = chunk[rellineid]
+        pixels['pixelid'] = pixelid
+    
+        del [rellineid, pixelid]
+
+        pixels['delta'] = 0
+        pixels['losdisp'] = 0
+
+        # first convert to the coarse coordinate
+        # relative to the global box
+        # so that it is ready for interpolation
+        xyz = xyzlya * (1. * A.NmeshCoarse / A.NmeshLyaEff)
+        xyz += offset[:, None] * A.NmeshCoarse / A.Nrep
+
+        pixels['delta'] += map_coordinates(delta0, xyz, 
+                mode='wrap', order=4, prefilter=False)
+        pixels['losdisp'] += map_coordinates(losdisp0, xyz, 
+                mode='wrap', order=4, prefilter=False)
+
+        # now goto the boxsize coordinate
+        # to evaluate the redshift
+        xyz *= A.BoxSize / A.NmeshCoarse
+        pixels['Zreal'] = A.xyz2redshift(xyz)
   
-    def blend_pixels1(pixels, xyz):
-        """ this will blend in the lyman alpha mesh """
         # first convert to the fine mesh coordinate
-        # relative to the rep box.
-        xyz = xyz / A.NmeshLya
-        pixels['delta'] += map_coordinates(delta1, xyz, 
-                mode='wrap', order=3, prefilter=False)
-        pixels['losdisp'] += map_coordinates(losdisp1, xyz, 
-                mode='wrap', order=3, prefilter=False)
-        if A.NmeshLya == 1:
-            return
+        # relative to the fine boxes.
+        xyz = xyzlya / A.NmeshLya
+        # no need to remove the offset for interpolation
+        # it's periodic. 
+        #  xyz -= offset * A.NmeshFineEff / A.Nrep
 
         # add in the lya scale power
-        linear = numpy.ravel_multi_index(numpy.int32(xyz), 
-                (A.NmeshFine, ) * 3)
+        linear = numpy.ravel_multi_index(xyz, 
+                (A.NmeshFine, ) * 3, mode='wrap')
+        pixels['delta'] += delta1.flat[linear]
+        pixels['losdisp'] += losdisp1.flat[linear]
+#        pixels['delta'] += map_coordinates(delta1, xyz, 
+#                mode='wrap', order=4, prefilter=False)
+#        pixels['losdisp'] += map_coordinates(losdisp1, xyz, 
+#                mode='wrap', order=4, prefilter=False)
+
         whichLyaBox = Lyatable[linear]
-        lyaoffset = xyz % A.NmeshLya
+
+        # no need to wrap, ravel_multi_index will do it
         ind = numpy.ravel_multi_index(
-                (whichLyaBox, lyaoffset[0], lyaoffset[1], lyaoffset[2]), 
+                (whichLyaBox, xyzlya[0], xyzlya[1], xyzlya[2]), 
                 deltalya.shape, mode='wrap')
         pixels['delta'] += deltalya.flat[ind]
 
-    for ch in range(0, len(xyz.T), 4096):
-          SL = slice(ch, ch + 4096)
-          blend_pixels1(pixels[SL], xyz[:, SL])
-      
-        
-def Zdistort(A, Z0, losdisp):
+        pixels['Zred'] = Zred(A, pixels['Zreal'], pixels['losdisp'])
+        #print i, j, k, 'interpolation', 'done', time.clock() - t
+        with pool.lock:
+            t = time.clock()
+            print i, j, k, 'writing out', len(pixels)
+            for field in ['delta', 'objectid', 'pixelid', 'losdisp',
+                          'Zreal', 'Zred']:
+                pixels[field].tofile(F[field])
+                F[field].flush()
+            print i, j, k, 'writing out', 'done', time.clock() - t
+    return var1, 1
+
+def Zred(A, Z0, losdisp):
     a = 1 / (1. + Z0)
     Ea = A.cosmology.Ea
     H0 = A.H0
@@ -183,10 +210,7 @@ def Zdistort(A, Z0, losdisp):
     FOmega = A.cosmology.FOmega
     D = Dplus(a) / Dplus(1.0)
     losvel = a * D * FOmega(a) * Ea(a) * H0 * losdisp
-    print 'losvel stat', losvel.max(), losvel.min()
     # moving away is positive
     dz = - losvel / A.C
-    Zshift = (1 + dz) * (1 + Z0) - 1 - Z0
-    print 'Z0', Z0.max(), Z0.min()
-    print 'Zshift', Zshift.max(), Zshift.min()
-    return Zshift
+    Zred = (1 + dz) * (1 + Z0) - 1
+    return Zred

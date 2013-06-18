@@ -1,8 +1,7 @@
-import lognormal
 import sightlines
 import gaussian
-import meanfluxfactor
-import normalize
-import rebin
-import check
+import lognormal
+import matchmeanflux
+import makespectra
 import export
+import qsocorr

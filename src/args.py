@@ -4,59 +4,71 @@ import StringIO
 import ConfigParser
 import argparse
 from scipy.interpolate import interp1d
+from scipy.interpolate import UnivariateSpline
 from cosmology import Cosmology, Lazy
+import chealpy
 
-pixeldtype0 = numpy.dtype(
-    [('delta', 'f4'), ('losdisp', 'f4'), ('row', 'i4'), ('ind', 'i4'), ('Z', 'f4')])
+pixeldtype = numpy.dtype(
+    [   
+        ('objectid', 'i4'), 
+        ('pixelid', 'i4'), 
+        ('delta', 'f4'), 
+        ('flux', 'f4'), 
+        ('rawflux', 'f4'), 
+        ('Zreal', 'f4'),
+        ('Zred', 'f4'),
+        ('losdisp', 'f4'), 
+    ])
 
-pixeldtype1 = numpy.dtype(
-    [('delta', 'f4'), ('Zshift', 'f4'), ('row', 'i4'), ('ind', 'i4'), ('Z0', 'f4')])
-pixeldtype2 = numpy.dtype(
-    [('F', 'f4'), ('Zshift', 'f4'), ('row', 'i4'), ('ind', 'i4'), ('Z0', 'f4')])
-
-bitmapdtype = numpy.dtype([('Z', 'f4'), ('F', 'f4'), ('lambda', 'f4'), ('pos', ('f4',
-    3)), ('row', 'i4')])
+bitmapdtype = numpy.dtype([
+    ('objectid', 'i4'),
+    ('lambda', 'f4'), 
+    ('Z', 'f4'), 
+    ('delta', 'f4'), 
+    ('flux', 'f4'), 
+    ('var', 'f4'), 
+    ('w', 'f4'), 
+    ('pos', ('f4', 3)), 
+    ])
 
 class Config(argparse.Namespace):
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("paramfile", 
                help="the paramfile")
-    parser.add_argument("mode", choices=['firstpass',
-       'secondpass', 
-       'thirdpass',
-       'fourthpass',
-       'fifthpass',
+    parser.add_argument("mode", choices=[
+       'gaussian',
+       'lognormal', 
+       'matchmeanflux',
+       'makespectra',
        'check',
        'export',
        'sightlines',
+       'qsocorr',
        ])
-    parser.add_argument("--row",
-               help="which row to do", type=int,
-               default=None)
     parser.add_argument("--usepass1",
                help="use pass1 input in fifthpass, \
                      thus the bitmap will be density", 
                action='store_true', default=False)
     parser.add_argument("--serial",
                help="serial", action='store_true', default=False)
-    parser.add_argument("--no-redshift-distortion", dest='redshift_distortion', 
-               help="without redshift distortion", action='store_false',
-               default=True)
 
     def export(self, dict, names):
         for name in names:
             setattr(self, name, dict[name])
-    def basename(self, i, j, k, post):
-        return '%s/%02d-%02d-%02d-delta-%s' % (self.datadir, i, j, k, post)
-
-    def Z(self, pixels):
-        if self.redshift_distortion:
-            return pixels['Z0'] + pixels['Zshift']
-        else:
-            return pixels['Z0']
 
     def FPGAmeanflux(self, a):
         return numpy.exp(-10**(self.FitB + self.FitA * numpy.log10(a)))
+
+    def P(self, field, memmap=None, justfile=None):
+        if justfile is not None:
+            return file(self.datadir + '/%s.raw' % field,
+                mode=justfile)
+        if memmap is None:
+            return numpy.fromfile(self.datadir + '/%s.raw' % field,
+                dtype=pixeldtype[field])
+        else:
+            return numpy.memmap(self.datadir + '/%s.raw' % field,
+                dtype=pixeldtype[field], mode=memmap)
 
     def __init__(self, argv):
         Config.parser.parse_args(argv, self)
@@ -67,17 +79,36 @@ class Config(argparse.Namespace):
 
         self.config = config
 
+        Sigma8 = config.getfloat("Cosmology", "Sigma8")
+        OmegaM = config.getfloat("Cosmology", "OmegaM")
+        OmegaB = config.getfloat("Cosmology", "OmegaB")
+        OmegaL = config.getfloat("Cosmology", "OmegaL")
+        RedshiftDistortion = config.getboolean("Cosmology", "RedshiftDistortion")
+        h = config.getfloat("Cosmology", "h")
+        G = 43007.1
+        C = 299792.458
+        H0 = 0.1
+        DH = C / H0
+        cosmology = Cosmology(M=OmegaM, 
+            L=OmegaL, B=OmegaB, h=h, sigma8=Sigma8)
+
+        self.export(locals(), [
+            'Sigma8', 'OmegaM', 'OmegaB', 'OmegaL',
+            'h', 'G', 'C', 'H0', 'DH', 'cosmology', 'RedshiftDistortion'])
+
         Seed = config.getint("IC", "Seed")
-        BoxSize = config.getfloat("IC", "BoxSize")
         NmeshCoarse = config.getint("IC", "NmeshCoarse")
         NmeshEff = config.getint("IC", "NmeshEff")
         Nrep = config.getint("IC", "Nrep")
         NLyaBox = config.getint("IC", "NLyaBox")
         Npixel = config.getint("IC", "Npixel")
         Geometry = config.get("IC", "Geometry")
-        Redshift = config.getfloat("IC", "Redshift")
-
+        Zmin = config.getfloat("IC", "Zmin")
+        Zmax = config.getfloat("IC", "Zmax")
+        BoxSize = cosmology.Dc(1 / (1 + Zmax)) * DH * 2
         Observer = numpy.array([BoxSize * 0.5] * 3, dtype='f8')
+        KSplit = 0.5 * 2 * numpy.pi / BoxSize * NmeshCoarse * 1.0
+
         assert Geometry in ['Sphere', 'Test']
 
         assert NmeshEff % Nrep == 0
@@ -89,29 +120,16 @@ class Config(argparse.Namespace):
         SeedTable = RNG.randint(1<<21 - 1, size=(Nrep,) * 3)
 
         self.export(locals(), [
-            'Seed', 'RNG', 'SeedTable', 'BoxSize', 'Redshift', 'NmeshFine', 'NmeshCoarse',
+            'Seed', 'RNG', 'SeedTable', 'BoxSize', 'Zmin', 'Zmax', 'NmeshFine',
+            'NmeshCoarse', 'KSplit',
             'NmeshEff', 'NLyaBox', 'Nrep', 'Geometry', 'Npixel', 'Observer'])
 
+        print 'BoxSize is', BoxSize
         print 'NmeshFine is', NmeshFine 
         print 'Nrep is', Nrep, 'grid', BoxSize / Nrep
         print 'NmeshEff is', NmeshEff, 'grid', BoxSize / NmeshEff
         print 'NmeshCoarse is', NmeshCoarse, 'grid', BoxSize / NmeshCoarse
-
-        Sigma8 = config.getfloat("Cosmology", "Sigma8")
-        OmegaM = config.getfloat("Cosmology", "OmegaM")
-        OmegaB = config.getfloat("Cosmology", "OmegaB")
-        OmegaL = config.getfloat("Cosmology", "OmegaL")
-        h = config.getfloat("Cosmology", "h")
-        G = 43007.1
-        C = 299792.458
-        H0 = 0.1
-        DH = C / H0
-        cosmology = Cosmology(M=OmegaM, 
-            L=OmegaL, B=OmegaB, h=h, sigma8=Sigma8)
-
-        self.export(locals(), [
-            'Sigma8', 'OmegaM', 'OmegaB', 'OmegaL',
-            'h', 'G', 'C', 'H0', 'DH', 'cosmology'])
+        print 'KSplit is', KSplit, 'in realspace', 2 * numpy.pi / KSplit
 
         QSOScale = config.getfloat("FPGA", "QSOscale")
         beta = config.getfloat("FPGA", "beta")
@@ -119,17 +137,15 @@ class Config(argparse.Namespace):
         FitA = config.getfloat("FPGA", "FitA")
         FitB = config.getfloat("FPGA", "FitB")
 
-        NmeshLya = int(BoxSize / NmeshEff / JeansScale * 0.25) * 4
-        NmeshQSO = int(BoxSize / Nrep / QSOScale * 0.25) * 4
+        NmeshLya = 2 ** (int(numpy.log2(BoxSize / NmeshEff / JeansScale) + 0.5))
+        NmeshQSO = 2 ** (int(numpy.log2(BoxSize / Nrep / QSOScale) + 0.5))
         if NmeshLya < 1: NmeshLya = 1
         if NmeshQSO < 1: NmeshQSO = 1
 
         NmeshLyaEff = NmeshLya * NmeshEff
         NmeshQSOEff = NmeshQSO * Nrep
-        print 'Lya Eff NmeshLyaEff = ', NmeshLyaEff, \
-                 BoxSize / NmeshLyaEff
-        print 'JeansScale is', JeansScale
-        print 'NmeshQSOEff is', NmeshQSOEff, 'grid', BoxSize / NmeshQSOEff
+        print 'NmeshLya is ', NmeshLya, 'grid', BoxSize / NmeshLyaEff
+        print 'NmeshQSO is', NmeshQSO, 'grid', BoxSize / NmeshQSOEff
 
         self.export(locals(), [
             'beta', 'JeansScale', 'FitA', 'FitB',
@@ -140,33 +156,152 @@ class Config(argparse.Namespace):
         self.export(locals(), ['datadir'])
 
     @Lazy
-    def QSOpercentile(self):
-        """ returns a function evaluating 
-            QSO peak percentile at given R
+    def QSObias(self):
+        """ returns a function evaluating QSO bias
+            at given R
+
+            current file is copied from 
         """
         config = self.config
+        string = """
+           0.24   1.41   0.18
+           0.49   1.38   0.06
+           0.80   1.45   0.38
+           1.03   1.83   0.03
+           1.23   2.37   0.25
+           1.41   1.92   0.50
+           1.58   2.42   0.40
+           1.74   2.79   0.47
+           1.92   3.62   0.49
+           2.10   2.99   1.42
+           2.40   4      5
+           3.20   6      2
+           4.0    10.5     3
+        """
         try:
-            QSOdensity = config.get("FPGA", "QSOdensityfile")
+            biasfile = config.get("QSO", "biasfile")
+            z, bias, err = numpy.loadtxt(biasfile, unpack=True)
+        except (ConfigParser.NoOptionError, ConfigParser.NoSectionError):
+            z, bias, err = numpy.fromstring(string, sep=' ').reshape(-1, 3).T
+        a = 1 / (z + 1.)
+        R = self.cosmology.Dc(a) * self.DH
+        spl = UnivariateSpline(R, bias, 1 / err)
+        return spl 
 
-            zbins = numpy.load(QSOdensity)['bins']
-            count = numpy.load(QSOdensity)['count']
-            a = 1 / (zbins + 1.)
-            R = self.cosmology.Dc(a) * self.DH
-            V = numpy.diff(4. / 3. * numpy.pi * R ** 3)
-            percentile = count / V / (self.NmeshQSO * self.Nrep / self.BoxSize) ** 3 
-            return interp1d((R[1:] + R[:-1]) * .5, percentile, bounds_error=False,
+    @Lazy
+    def QSOdensity(self):
+        """ returns a function evaluating 
+            mean QSO density at given R
+            the input QSOdensityfile, constains
+            two npy arrays, 
+            bins, the zbins (N + 1 entries)
+            count, the number count of QSOs in that bin, 
+            (N entries)
+
+            This file can be prepared with 
+            f = gaepsi.cosmology.agn.qlf_observer.
+            and output f(z)
+        """
+        string = """
+0.1 5.20571573185e-15 0.2 2.96627124784e-14
+0.4 5.94935402372e-14 0.6 6.02256554399e-14
+0.8 5.30889459081e-14 1.0 4.79606024125e-14
+1.2 4.37453636884e-14 1.4 3.98509187531e-14
+1.6 3.58656511045e-14 1.8 3.16185604541e-14
+2.0 2.71388657143e-14 2.2 2.25732139999e-14
+2.4 1.81159328576e-14 2.6 1.39619212926e-14
+2.8 1.02769869655e-14 3.0 7.17907201412e-15
+3.2 4.72732379062e-15 3.4 2.91919547441e-15
+3.6 1.69562293098e-15 3.8 9.54231503902e-16
+4.0 5.68664902877e-16 4.2 4.10471722414e-16
+4.4 3.68932895967e-16 4.6 3.64347275462e-16
+4.8 3.52067723866e-16 5.0 3.17466641007e-16
+5.2 2.60245877731e-16 5.4 1.96528168034e-16
+5.6 1.34140178176e-16 5.8 8.16047392053e-17
+6.0 4.37813317973e-17 """
+        try:
+            QSOdensity = self.config.get("QSO", "QSOdensityfile")
+            z = numpy.load(QSOdensity)['z']
+            density = numpy.load(QSOdensity)['density']
+            print 'using ', QSOdensity, 'for mean qso density'
+        except (ConfigParser.NoOptionError, ConfigParser.NoSectionError):
+            print 'using builtin i band limited hopkins qlf for mean qso density'
+            z, density = numpy.fromstring(string, sep=' ').reshape(-1, 2).T
+        a = 1 / (z + 1.)
+        R = self.cosmology.Dc(a) * self.DH
+        return interp1d(R, density, bounds_error=False,
                 fill_value=0.0)
-        except:
-            QLF = config.get("FPGA", "QLFfile")
 
-            z = numpy.load(QLF)['z']
-            density = numpy.load(QLF)['density']
-            a = 1 / (z + 1.)
-            R = self.cosmology.Dc(a) * self.DH
-            percentile = density / (self.NmeshQSO * self.Nrep / self.BoxSize) ** 3 
-            print percentile.max()
-            return interp1d(R, percentile, bounds_error=False, fill_value=0.0)
 
+    @Lazy
+    def SurveyQSOdensity(self):
+        """ returns a function evaluating 
+            Survey QSO number density at given R
+            This will be adjusted by the sky mask
+
+            the input surveydensityfile, constains
+            two npy arrays, 
+            z
+            specdensity, dN / dz where N is number QSOs
+
+            The default is to use the SDSS DR9 count.
+        """
+        string = """
+0.0 34.0985107917 0.2 959.763566767 0.4 6605.80243392 0.6 32523.7675186
+0.8 72691.414628 1.0 26855.6444122 1.2 11530.0423145 1.4 12669.611195
+1.6 25099.5717001 1.8 22712.9437337 2.0 35654.3477467 2.2 153115.318974
+2.4 178890.569673 2.6 115889.244553 2.8 69022.9874509 3.0 56040.3877876
+3.2 41957.1799842 3.4 18310.9661606 3.6 11673.2289537 3.8 9949.67508789
+4.0 5060.53773401 4.2 2350.06892613 4.4 1150.65036452 4.6 767.760735547
+4.8 603.559006041 5.0 266.067138644 5.2 108.856505818 5.4 18.8484273619
+5.6 5.94102761023 5.8 4.30473603211 6.0 0.662939420386 
+"""
+        try:
+            QSOcount = self.config.get("QSO", "Surveydensityfile")
+            z = numpy.load(QSOdensity)['z']
+            specdensity = numpy.load(QSOdensity)['specdensity']
+        except (ConfigParser.NoOptionError, ConfigParser.NoSectionError):
+            print 'using builtin DR9 qso specdensity file'
+            z, specdensity = numpy.fromstring(string, sep=' ').reshape(-1, 2).T
+            
+        a = 1 / (z + 1)
+        R = self.cosmology.Dc(a) * self.DH
+        density = specdensity * (- a ** -2) * \
+        self.cosmology.aback(R / self.DH, nu=1) / self.DH / (4 * numpy.pi * R ** 2)
+        # adjust for sky 
+        density /= self.skymask.fraction
+        density[0] = 0
+        return interp1d(R, density, bounds_error=False, fill_value=0.0)
+
+    @Lazy
+    def skymask(self):
+        """ sky mask in mango healpix format """
+        try:
+            skymask = self.config.get("QSO", "skymaskfile")
+            skymask = numpy.loadtxt(skymask, skiprows=1)
+        except (ConfigParser.NoOptionError, ConfigParser.NoSectionError):
+            skymask = numpy.ones(2 * 2 * 12)
+        Nside = chealpy.npix2nside(len(skymask))
+        print 'using healpix sky mask Nside', Nside
+        def func(xyz):
+            """ look up the sky mask from xyz vectors
+                xyz is row vectors [..., 3] """
+            ipix = chealpy.vec2pix_nest(Nside, xyz)
+            #Nside, 0.5 * numpy.pi - dec, ra)
+            return skymask[ipix]
+
+        func.Nside = Nside
+        func.fraction = skymask.sum() / len(skymask)
+        func.mask = skymask
+        return func 
+         
+
+         
+    def yieldwork(self):
+        for i in range(self.Nrep):
+            for j in range(self.Nrep):
+                for k in range(self.Nrep):
+                    yield i, j, k
     @Lazy
     def power(self):
         config = self.config
@@ -188,14 +323,6 @@ class Config(argparse.Namespace):
         power = interp1d(k, p, kind='linear', copy=True, 
                          bounds_error=False, fill_value=0)
         return power
-
-    @Lazy
-    def Zmin(self):
-        return self.sightlines.Zmin.min()
-
-    @Lazy
-    def Zmax(self):
-        return self.sightlines.Zmax.max()
 
     @Lazy
     def sightlines(self):
@@ -225,8 +352,8 @@ class Config(argparse.Namespace):
             sightlines.Z = raw.Z_VI
             sightlines.Zmax = (raw.Z_VI + 1) * 1216. / 1216 - 1
             sightlines.Zmin = (raw.Z_VI + 1) * 1026. / 1216 - 1
-            sightlines.Zmin[sightlines.Zmin<self.Redshift] = self.Redshift
-            sightlines.Zmax[sightlines.Zmax<self.Redshift] = self.Redshift
+            sightlines.Zmin[sightlines.Zmin<self.Zmin] = self.Zmin
+            sightlines.Zmax[sightlines.Zmax<self.Zmin] = self.Zmin
             raw.RA *= numpy.pi / 180
             raw.DEC *= numpy.pi / 180
             sightlines.x1[:, 0] = numpy.cos(raw.RA) * numpy.cos(raw.DEC)
@@ -244,9 +371,9 @@ class Config(argparse.Namespace):
             sightlines.x1 += self.BoxSize * 0.5
             sightlines.x2 += self.BoxSize * 0.5
         elif self.Geometry == 'Test':
-            sightlines = numpy.empty(Npixel ** 2, 
+            sightlines = numpy.empty(self.Npixel ** 2, 
                     dtype=sightlinedtype).view(numpy.recarray)
-            Zmin = self.Redshift
+            Zmin = self.Zmin
             Dcmin = self.cosmology.Dc(1 / (Zmin + 1))
             Zmax = 1 / self.cosmology.aback(Dcmin + self.BoxSize / self.DH) - 1
             sightlines.Zmax[...] = Zmax
@@ -260,63 +387,32 @@ class Config(argparse.Namespace):
             sightlines.x2[...] = sightlines.x1 
             sightlines.x2[:, 2] = self.BoxSize
 
-        assert (sightlines.x1 + 1>= 0).all()
-        assert (sightlines.x1 - 1<= self.BoxSize).all()
-        assert (sightlines.x2 + 1>= 0).all()
-        assert (sightlines.x2 - 1<= self.BoxSize).all()
+        if (sightlines.x1 + 1>= 0).all() and \
+           (sightlines.x1 - 1<= self.BoxSize).all() and \
+           (sightlines.x2 + 1>= 0).all() and \
+           (sightlines.x2 - 1<= self.BoxSize).all():
+            pass
+        else:
+            print 'some sightlines are not fully in box'
 
         return sightlines
 
-
-    def yieldwork(self):
-        if self.row is not None:
-            for jk in range(self.Nrep * self.Nrep):
-                j, k = numpy.unravel_index(jk, (self.Nrep, ) * 2)
-                yield self.row, j, k
+    def xyz2redshift(self, xyz):
+        """ returns the redshift of position xyz,
+            xyz is in full box box units. (not any grids)
+        """
+        if self.Geometry == 'Test':
+            R = xyz[2].copy()
+            # offset by the redshift
+            R += self.cosmology.Dc(1 / (self.Zmin + 1)) * self.DH
+        elif self.Geometry == 'Sphere':
+            R = ((xyz - self.Observer[:, None]) ** 2).sum(axis=0) ** 0.5
         else:
-            for ijk in range(self.Nrep * self.Nrep * self.Nrep):
-                i, j, k = numpy.unravel_index(ijk, (self.Nrep, ) * 3)
-                yield i, j, k
-    
+            raise Exception('Geometry unknown')
+        R /= self.DH
+        return 1 / self.cosmology.aback(R) - 1
+
 def parseargs(argv=None):
   return Config(argv)
 
-
-def loadpower(args):
-    return func
-
-def loadpixel(args, i, j, k):
-  if args.pixeldir is not None:
-    try:
-      return numpy.fromfile(args.pixeldir + "%02d-%02d-%02d-pixels.raw" % (i, j, k), dtype=pixeldtype)
-    except IOError:
-      return numpy.array([], dtype=pixeldtype)
-  else:
-    Offset = numpy.array(numpy.unravel_index(numpy.arange(args.Nrep ** 3),
-             (args.Nrep, ) * 3)).T.reshape(args.Nrep, args.Nrep, args.Nrep, 3) \
-               * args.BoxSize / args.Nrep
-    Npix = args.Npix / args.Nrep
-    intpos = numpy.array(numpy.unravel_index(numpy.arange(Npix ** 3),
-             (Npix, ) * 3)).T
-    rt = numpy.empty(shape=len(intpos), dtype=pixeldtype)
-    rt['pos'] = Offset[i, j, k] + intpos * (args.BoxSize / args.Npix)
-    DH = args.C / args.H
-    dist = rt['pos'][:, 2] + DH * args.cosmology.Dc(1 / (1. + args.Redshift))
-    rt['Z'] = 1 / args.cosmology.aback(dist / DH) - 1
-    rt['row'] = (i * Npix+ intpos[:, 0]) * args.Npix + j * Npix + intpos[:, 1]
-    rt['ind'] = intpos[:, 2] + k * Npix
-    return rt
-
-def writefill(fill, basename, stat=None):
-    fill.tofile(basename + '.raw')
-    if stat is not None:
-      K2 = (fill['delta'] ** 2).sum(dtype='f8')
-      K = fill['delta'].sum(dtype='f8')
-      N = fill['delta'].size
-      file(basename + '.info-file', mode='w').write(
-"""
-K2 = %(K2)g
-K = %(K)g
-N = %(N)g
-""" % locals())
-    print 'wrote', basename
+from corr import powerfromdelta, corrfrompower

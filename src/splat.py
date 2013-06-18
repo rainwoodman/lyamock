@@ -10,7 +10,7 @@ def splat(t, value, bins):
     """
     if len(t) == 0:
         return numpy.zeros(len(bins) + 1)
-    t = numpy.float64(t)
+    t = numpy.array(t, copy=True, dtype='f8')
     t, label = numpy.unique(t, return_inverse=True)
     if numpy.isscalar(value):
         value = numpy.bincount(label) * value
