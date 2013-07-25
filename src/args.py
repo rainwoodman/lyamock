@@ -13,11 +13,14 @@ pixeldtype = numpy.dtype(
         ('objectid', 'i4'), 
         ('pixelid', 'i4'), 
         ('delta', 'f4'), 
+        ('dispx', 'f4'), 
+        ('dispy', 'f4'), 
+        ('dispz', 'f4'), 
+        ('xyzlya', ('f4', 3)), 
         ('flux', 'f4'), 
         ('rawflux', 'f4'), 
         ('Zreal', 'f4'),
         ('Zred', 'f4'),
-        ('losdisp', 'f4'), 
     ])
 
 bitmapdtype = numpy.dtype([
@@ -25,32 +28,50 @@ bitmapdtype = numpy.dtype([
     ('lambda', 'f4'), 
     ('Z', 'f4'), 
     ('delta', 'f4'), 
+    ('deltared', 'f4'), 
     ('flux', 'f4'), 
-    ('var', 'f4'), 
-    ('w', 'f4'), 
+    ('fluxred', 'f4'), 
+    ('wred', 'f4'), 
+    ('wreal', 'f4'), 
     ('pos', ('f4', 3)), 
     ])
+
+sightlinedtype=numpy.dtype([('RA', 'f8'), 
+                             ('DEC', 'f8'), 
+                             ('Z_VI', 'f8'),
+                             ('R', 'f8'),
+                             ('refPLATE', 'i2'),
+                             ('refMJD', 'i4'),
+                             ('refFIBERID', 'i2')])
 
 class Config(argparse.Namespace):
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("paramfile", 
                help="the paramfile")
-    parser.add_argument("mode", choices=[
+    parser.add_argument("command", choices=[
+       'sightlines',
        'gaussian',
        'lognormal', 
        'matchmeanflux',
        'makespectra',
        'check',
        'export',
-       'sightlines',
        'qsocorr',
+       'pixelcorr',
+       'pixelcorr2d',
        ])
     parser.add_argument("--usepass1",
-               help="use pass1 input in fifthpass, \
+               help="use only density input in fifthpass, \
+                     thus the bitmap will be density", 
+               action='store_true', default=False)
+    parser.add_argument("--skipred",
+               help="skip redshift in fifthpass, \
                      thus the bitmap will be density", 
                action='store_true', default=False)
     parser.add_argument("--serial",
                help="serial", action='store_true', default=False)
+    parser.add_argument("--prefix",
+               help="dir to put the export", default='.')
 
     def export(self, dict, names):
         for name in names:
@@ -59,16 +80,22 @@ class Config(argparse.Namespace):
     def FPGAmeanflux(self, a):
         return numpy.exp(-10**(self.FitB + self.FitA * numpy.log10(a)))
 
-    def P(self, field, memmap=None, justfile=None):
-        if justfile is not None:
-            return file(self.datadir + '/%s.raw' % field,
-                mode=justfile)
+    def F(self, field, mode='r'):
+        return file(self.datadir + '/%s.raw' % field, mode=mode)
+
+    def P(self, field, memmap=None, shape=None, dtype=None):
+        if dtype is None:
+            dtype = pixeldtype[field]
         if memmap is None:
-            return numpy.fromfile(self.datadir + '/%s.raw' % field,
-                dtype=pixeldtype[field])
+            rt = numpy.fromfile(self.datadir + '/%s.raw' % field,
+                dtype=dtype)
+            if shape is not None:
+                return rt.reshape(shape)
+            else:
+                return rt
         else:
             return numpy.memmap(self.datadir + '/%s.raw' % field,
-                dtype=pixeldtype[field], mode=memmap)
+                dtype=dtype, mode=memmap, shape=shape)
 
     def __init__(self, argv):
         Config.parser.parse_args(argv, self)
@@ -83,7 +110,6 @@ class Config(argparse.Namespace):
         OmegaM = config.getfloat("Cosmology", "OmegaM")
         OmegaB = config.getfloat("Cosmology", "OmegaB")
         OmegaL = config.getfloat("Cosmology", "OmegaL")
-        RedshiftDistortion = config.getboolean("Cosmology", "RedshiftDistortion")
         h = config.getfloat("Cosmology", "h")
         G = 43007.1
         C = 299792.458
@@ -94,7 +120,7 @@ class Config(argparse.Namespace):
 
         self.export(locals(), [
             'Sigma8', 'OmegaM', 'OmegaB', 'OmegaL',
-            'h', 'G', 'C', 'H0', 'DH', 'cosmology', 'RedshiftDistortion'])
+            'h', 'G', 'C', 'H0', 'DH', 'cosmology'])
 
         Seed = config.getint("IC", "Seed")
         NmeshCoarse = config.getint("IC", "NmeshCoarse")
@@ -137,19 +163,18 @@ class Config(argparse.Namespace):
         FitA = config.getfloat("FPGA", "FitA")
         FitB = config.getfloat("FPGA", "FitB")
 
-        NmeshLya = 2 ** (int(numpy.log2(BoxSize / NmeshEff / JeansScale) + 0.5))
+        NmeshLyaBox = 2 ** (int(numpy.log2(BoxSize / NmeshEff / JeansScale) + 0.5))
         NmeshQSO = 2 ** (int(numpy.log2(BoxSize / Nrep / QSOScale) + 0.5))
-        if NmeshLya < 1: NmeshLya = 1
+        if NmeshLyaBox < 1: NmeshLyaBox = 1
         if NmeshQSO < 1: NmeshQSO = 1
 
-        NmeshLyaEff = NmeshLya * NmeshEff
         NmeshQSOEff = NmeshQSO * Nrep
-        print 'NmeshLya is ', NmeshLya, 'grid', BoxSize / NmeshLyaEff
+        print 'NmeshLyaBox is ', NmeshLyaBox, 'grid', BoxSize / NmeshEff / NmeshLyaBox
         print 'NmeshQSO is', NmeshQSO, 'grid', BoxSize / NmeshQSOEff
 
         self.export(locals(), [
             'beta', 'JeansScale', 'FitA', 'FitB',
-            'NmeshLya', 'NmeshLyaEff', 'QSOScale', 'NmeshQSO', 'NmeshQSOEff'] )
+            'NmeshLyaBox', 'QSOScale', 'NmeshQSO', 'NmeshQSOEff'] )
 
 
         datadir = config.get("IO", "datadir")
@@ -295,8 +320,6 @@ class Config(argparse.Namespace):
         func.mask = skymask
         return func 
          
-
-         
     def yieldwork(self):
         for i in range(self.Nrep):
             for j in range(self.Nrep):
@@ -320,18 +343,38 @@ class Config(argparse.Namespace):
             numpy.savetxt(power, zip(k, p))
 
         p[numpy.isnan(p)] = 0
-        power = interp1d(k, p, kind='linear', copy=True, 
-                         bounds_error=False, fill_value=0)
+        power = k, p
         return power
+
+    @Lazy
+    def fibers(self):
+        fibers = self.config.get("IO", 'fibers')
+        array = numpy.loadtxt(fibers, usecols=(1, 2, 3, 4, 5, 6),
+            dtype=[
+                ('PLATE', 'i2'),
+                ('MJD', 'i4'),
+                ('FIBERID', 'i2'),
+                ('RA', 'f8'),
+                ('DEC', 'f8'),
+                ('Z_VI', 'f8')])
+        fibers = array[array['Z_VI'].argsort()]
+        return fibers
 
     @Lazy
     def sightlines(self):
         config = self.config
-        sightlinedtype = [('x1', ('f8', 3)),
+        internalsightlinedtype = [('x1', ('f8', 3)),
                        ('x2', ('f8', 3)),
+                       ('dir', ('f8', 3)),
                        ('Z', 'f8'),
                        ('Zmax', 'f8'),
-                       ('Zmin', 'f8')]
+                       ('Zmin', 'f8'),
+                       ('RA', 'f8'),
+                       ('DEC', 'f8'),
+                       ('refMJD', 'i4'),
+                       ('refPLATE', 'i2'),
+                       ('refFIBERID', 'i2'),
+                       ]
         if self.Geometry == 'Sphere':
             try:
                 linesfile = config.get("IO", 'sightlines')
@@ -339,21 +382,34 @@ class Config(argparse.Namespace):
                       dtype=[('RA', 'f8'), 
                              ('DEC', 'f8'), 
                              ('Z_VI', 'f8'), 
-                             ('THINGID', 'i8')]).view(numpy.recarray)
+                             ('THINGID', 'i8'),
+                             ('PLATE', 'i2'),
+                             ('MJD', 'i4'),
+                             ('FIBERID', 'i2'),
+                             ]).view(numpy.recarray)
             except ConfigParser.NoOptionError:
                 linesfile = self.datadir + '/QSOcatelog.txt'
-                raw = numpy.loadtxt(linesfile, usecols=(0, 1, 2), 
+                raw = numpy.loadtxt(linesfile, usecols=(0, 1, 2, 3, 4, 5, 6), 
                       dtype=[('RA', 'f8'), 
                              ('DEC', 'f8'), 
-                             ('Z_VI', 'f8')
+                             ('Z_VI', 'f8'),
+                             ('R', 'f8'),
+                             ('PLATE', 'i2'),
+                             ('MJD', 'i4'),
+                             ('FIBERID', 'i2'),
                              ]).view(numpy.recarray)
             sightlines = numpy.empty(raw.size, 
-                    dtype=sightlinedtype).view(numpy.recarray)
+                    dtype=internalsightlinedtype).view(numpy.recarray)
+            sightlines.RA = raw.RA
+            sightlines.DEC = raw.DEC
+            sightlines.refPLATE = raw.PLATE
+            sightlines.refFIBERID = raw.FIBERID
+            sightlines.refMJD = raw.MJD
             sightlines.Z = raw.Z_VI
             sightlines.Zmax = (raw.Z_VI + 1) * 1216. / 1216 - 1
             sightlines.Zmin = (raw.Z_VI + 1) * 1026. / 1216 - 1
-            sightlines.Zmin[sightlines.Zmin<self.Zmin] = self.Zmin
-            sightlines.Zmax[sightlines.Zmax<self.Zmin] = self.Zmin
+            sightlines.Zmin[sightlines.Zmin<0] = 0
+            sightlines.Zmax[sightlines.Zmax<0] = 0
             raw.RA *= numpy.pi / 180
             raw.DEC *= numpy.pi / 180
             sightlines.x1[:, 0] = numpy.cos(raw.RA) * numpy.cos(raw.DEC)
@@ -387,6 +443,10 @@ class Config(argparse.Namespace):
             sightlines.x2[...] = sightlines.x1 
             sightlines.x2[:, 2] = self.BoxSize
 
+        sightlines.dir = sightlines.x2 - sightlines.x1
+        sightlines.dir *= numpy.einsum('ij, ij->i', sightlines.dir,
+                sightlines.dir)[:, None] ** -0.5
+
         if (sightlines.x1 + 1>= 0).all() and \
            (sightlines.x1 - 1<= self.BoxSize).all() and \
            (sightlines.x2 + 1>= 0).all() and \
@@ -402,17 +462,68 @@ class Config(argparse.Namespace):
             xyz is in full box box units. (not any grids)
         """
         if self.Geometry == 'Test':
-            R = xyz[2].copy()
+            R = xyz[:, 2].copy()
             # offset by the redshift
             R += self.cosmology.Dc(1 / (self.Zmin + 1)) * self.DH
         elif self.Geometry == 'Sphere':
-            R = ((xyz - self.Observer[:, None]) ** 2).sum(axis=0) ** 0.5
+            R = ((xyz - self.Observer[None, :]) ** 2).sum(axis=-1) ** 0.5
         else:
             raise Exception('Geometry unknown')
         R /= self.DH
         return 1 / self.cosmology.aback(R) - 1
+    def layout(self, Ntot, chunksize):
+        layout = Layout(Nrep=self.Nrep, Ntot=Ntot, chunksize=chunksize)
+        layout.REPoffset = \
+                numpy.array(numpy.indices((self.Nrep,) * 3)).transpose((1, 2, 3, 0))
+        layout.LYAoffset = \
+                layout.REPoffset * self.NmeshFine * self.NmeshLyaBox
+        layout.LYAsize   = numpy.repeat(self.NmeshFine * self.NmeshLyaBox, \
+                self.Nrep ** 3).reshape((self.Nrep, ) * 3)
+        return layout
 
 def parseargs(argv=None):
   return Config(argv)
 
-from corr import powerfromdelta, corrfrompower
+class Chunk(object):
+    def __init__(self, box, i):
+        self.i = i 
+        self.box = box
+        self._dict = {}
+        self.offset = i * box.layout.chunksize
+
+    def getslice(self):
+        return slice(self.offset, self.offset + self.box.layout.chunksize)
+    def __getattr__(self, attr):
+        return getattr(self.box, attr)[self.i:self.i+1].squeeze()
+    def __getitem__(self, item):
+        return self._dict[item]
+    def __setitem__(self, item, value):
+        self._dict[item] = value
+
+class Box(object):
+    def __init__(self, layout, i, j, k):
+        self.i, self.j, self.k = i, j, k
+        self.layout = layout
+    def __getitem__(self, i):
+        return Chunk(self, i)
+    def __getattr__(self, attr):
+        return getattr(self.layout, attr)[self.i, self.j, self.k]
+    def __iter__(self):
+        for i in range(self.layout.Nchunks):
+            yield self[i]
+    
+class Layout(object):
+    def __init__(self, Nrep, Ntot, chunksize):
+        self.Nrep = Nrep
+        self.Ntot = Ntot
+        self.chunksize = chunksize
+        self.Nchunks = \
+            (Ntot + chunksize - 1) // chunksize
+    def __getitem__(self, index):
+        return Box(self, *index)
+    def __iter__(self):
+        for i in range(self.Nrep):
+            for j in range(self.Nrep):
+                for k in range(self.Nrep):
+                    yield self[i, j, k]
+

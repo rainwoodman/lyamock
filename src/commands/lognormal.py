@@ -17,8 +17,12 @@ def main(A):
   print 'sample std =', delta.var()
   chunksize = 1048576
   Zreal = A.P('Zreal', memmap='r')
-  flux = A.P('rawflux', justfile='w')
-  for i in range(0, len(delta), chunksize):
+
+  with A.F('rawflux', mode='w') as flux:
+      flux.flush()
+
+  with sharedmem.Pool() as pool:
+    def work(i):
       SL = slice(i, i + chunksize)
       a = 1 / (1 + Zreal[SL])
       D = Dplus(a) / Dplus0
@@ -26,8 +30,11 @@ def main(A):
       d = lognormal(d, std=std * D)
       f = numpy.exp(-numpy.exp(A.beta * d)),
       f = numpy.array(f, dtype=pixeldtype['rawflux'])
-      f.tofile(flux)
-      flux.flush()
+      with pool.ordered:
+          with A.F('rawflux', mode='a') as flux:
+              f.tofile(flux)
+              flux.flush()
+    pool.map(work, range(0, len(delta), chunksize))
 
 """
 def normalization(A):

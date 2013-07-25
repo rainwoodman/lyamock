@@ -63,7 +63,7 @@ class Cosmology(object):
       return 1 / self.Ea(a) * a ** -1 # dz = - 1 / a dloga
     y = numpy.array(
         [romberg(kernel, loga, 0, vec_func=True, divmax=10) for loga in logx])
-    def func(xval, 
+    def func(xval,
             intp=interp1d(logx, y, kind=5)):
       return intp(numpy.log(xval))
     func.y = y
@@ -72,26 +72,53 @@ class Cosmology(object):
     """evaluates Dc(a) / DH
        (dimensionless, not multiplied by H0)
        for OmegaM = %g, OmegaL = %g
+       .inv evaluates look-back time a from given Dc. 
     """ % (M, L)
-    return func
 
-  @Lazy
-  def aback(self):
-    M, L = self.M, self.L
-    y = self.Dc.x[::-1]
-    x = self.Dc.y[::-1]
+    y = func.x[::-1]
+    x = func.y[::-1]
     assert (x[1:] > x[:-1]).all()
-    def func(xval, nu=0,
+    def inv(xval, nu=0,
             intp=interp1d(x, y, 
                bounds_error=True, 
                fill_value=numpy.nan, kind=5)):
       return intp(xval, nu=nu)
-    func.__doc__ = \
+    inv.__doc__ = \
     """evaluates look-back time 
        (in terms of expansion factor a)
        at given dimensionless comoving distance
        (Dc/DH)
     """
+    func.inv = inv
+    return func
+
+  @Lazy
+  def aback(self):
+    return self.Dc.inv
+
+  @Lazy
+  def Vrec(self):
+    """ returns the recessing velocity at given time a,
+        in unit of C"""
+    x = self.Dc.x
+    y = self.Dc.y
+
+    v = y * self.Ea(x) * x
+
+    def func(xval, nu=0,
+            intp=interp1d(x, v, kind=5)):
+      return intp(xval, nu)
+    def inv(xval, nu=0,
+            intp=interp1d(v[::-1], x[::-1], kind=5)):
+      return intp(xval, nu)
+
+    func.__doc__ = \
+    """evaluates recessing velocity at time a
+       (in terms of expansion factor a)
+       in unit of C.
+       .inv gives time a as function of recessing velocity
+    """
+    func.inv = inv
     return func
 
   @Lazy
@@ -164,5 +191,35 @@ class Cosmology(object):
        k is in 1/DH and p is in DH**3
     """
     return func
+
+  def disp_to_vel(self, disp, a):
+    """ convert init. displacement to init. velocity,
+        time given by a
+        losvel is physical / proper
+        initial disp shall be in units of DH.
+    """
+    Ea = self.Ea
+    Dplus = self.Dplus
+    FOmega = self.FOmega
+    D = Dplus(a) / Dplus(1.0)
+    losvel = a * D * FOmega(a) * Ea(a) * disp
+    return losvel
+
+  def redshift_dist(self, losvel, a):
+    """redshift distortion by los displacement
+       for losvel, moving away is positive
+       moving away is larger z, smaller a
+
+       returns a, not z
+    """
+    # losvel is physical / proper
+    # for losvel, moving away is posative
+    # moving away is larger z
+    #
+    # from Martin White's 2012 Santa Fe notes
+    Dc = self.Dc(a)
+    Dcred = Dc + losvel / (a * self.Ea(a))
+    ared = self.Dc.inv(Dcred)
+    return ared
 
 WMAP7 = Cosmology(M=0.272, L=0.728, h=0.702, B=0.046, sigma8=0.801)

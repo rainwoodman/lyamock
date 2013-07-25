@@ -1,53 +1,104 @@
 import numpy
-import density
-from args import pixeldtype
 from bresenham import clipline
-from scipy.ndimage import map_coordinates
 import sharedmem
-import time
-   
+import density
+from scipy.ndimage import spline_filter, map_coordinates
+
 def main(A):
-    """ raw guassian field"""
-    global realize_losdisp
-    global deltalya
-    global delta0, losdisp0
-    global F
+    var0 = initcoarse(A)
+    var1 = initfine1(A)
+    varlya = initlya(A)
+    print 'gaussian-variance is', var0 + var1 + varlya
+    numpy.savetxt(A.datadir + '/gaussian-variance.txt', [var0 + var1 + varlya])
+    
+    layout = A.layout(len(A.sightlines), chunksize=128)
 
-    F= {}
-    for field in pixeldtype.fields:
-        F[field] = A.P(field, justfile='w')
+    layout.Npixels = sharedmem.empty((A.Nrep,) * 3,
+            dtype=('intp', (layout.Nchunks, )))
 
+    Estimator.prepare(A)
+    with sharedmem.Pool() as pool:
+        def work(i, j, k):
+            box = layout[i, j, k]
+            proc = Estimator(box)
+            for chunk in box:
+                proc.visit(chunk)
+        pool.starmap(work, A.yieldwork())
 
-    if A.Geometry == 'Test':
-        realize_losdisp = density.realize_dispz
-    elif A.Geometry == 'Sphere':
-        realize_losdisp = density.realize_dispr
-    else:
-        raise Exception("Geometry unknown")
-  
-    print 'using', len(A.sightlines), 'sightlines'
-    print 'preparing large scale modes'
-  
+    layout.PixelEnd = layout.Npixels.cumsum().reshape(layout.Npixels.shape)
+    layout.PixelStart = layout.PixelEnd.copy()
+    layout.PixelStart[0] = 0
+    layout.PixelStart.flat[1:] = layout.PixelEnd.flat[:-1]
+
+    processors = [ 
+            GeneratePixels,
+            AddDelta,
+            AddLya,
+            AddDisp(0, 'dispx'),
+            AddDisp(1, 'dispy'),
+            AddDisp(2, 'dispz'),
+        ]
+
+    M = {}
+    for proc in processors:
+        proc.prepare(A, layout.Npixels.sum())
+
+    print 'spawn and work'
+    with sharedmem.Pool() as pool:
+        def work(i, j, k):
+            box = layout[i, j, k]
+            if box.Npixels.sum() == 0: return
+            for cls in processors:
+                proc = cls(box)
+                for chunk in box:
+                    proc.visit(chunk)
+                # free memory
+                del proc 
+            print 'done', i, j, k
+        pool.starmap(work, A.yieldwork())
+
+    for field in Visitor.M:
+        Visitor.M[field].flush()
+
+def initcoarse(A):
+    global delta0, disp0
     delta0, var0 = density.realize(A.power, 
                    A.Seed, 
                    A.NmeshCoarse, 
-                   A.BoxSize, order=4,
+                   A.BoxSize,
                    Kmax=A.KSplit)
-    losdisp0 = realize_losdisp(A.power, 
-                 [0, 0, 0], A.Observer,
+    delta0 = spline_filter(delta0, order=4, output=numpy.dtype('f4'))
+
+    disp0 = numpy.empty((3, A.NmeshCoarse, 
+        A.NmeshCoarse, A.NmeshCoarse), dtype='f4')
+    for d in range(3):
+        disp0[d], junk = density.realize(A.power, 
                  A.Seed, A.NmeshCoarse,
-                 A.BoxSize, order=4,
+                 A.BoxSize, disp=d,
                  Kmax=A.KSplit)
-  
+        disp0[d] = spline_filter(disp0[d], order=4, output=numpy.dtype('f4')) 
+
     print 'coarse field var', var0
+    return var0
+
+def initfine1(A):
+    junk, var1 = density.realize(A.power, 
+               A.SeedTable[0, 0, 0], 
+               A.NmeshFine, 
+               A.BoxSize / A.Nrep, 
+               Kmin=A.KSplit)
+    return var1
+
+def initlya(A):
+    global deltalya
     print 'preparing LyaBoxes'
   
     # fill the lya resolution small boxes
     deltalya = sharedmem.empty((A.NLyaBox, 
-        A.NmeshLya, A.NmeshLya, A.NmeshLya))
+        A.NmeshLyaBox, A.NmeshLyaBox, A.NmeshLyaBox))
   
     deltalya[:] = 0
-    if A.NmeshLya > 1:
+    if A.NmeshLyaBox > 1:
         # this is the kernel to correct for log normal transformation
         # as it matters when we get to near the JeansScale
         def kernel(kx, ky, kz, k):
@@ -59,158 +110,177 @@ def main(A):
         def work(i):
             deltalya[i], varjunk = density.realize(A.power, 
                     seed[i],
-                    A.NmeshLya, 
+                    A.NmeshLyaBox, 
                     A.BoxSize / A.NmeshEff, 
                     Kmin=cutoff,
                     kernel=kernel)
-        with sharedmem.Pool(use_threads=False) as pool:
+        with sharedmem.Pool() as pool:
             pool.map(work, range(A.NLyaBox))
 
     print 'lya field', 'mean', deltalya.mean(), 'var', deltalya.var()
-    print 'spawn and work on intermediate scales'
+    return deltalya.var()
 
-    time.clock()
+class Visitor(object):
+    M = {}
+    @staticmethod
+    def prepare(cls, A, Npixels, fields):
+        cls.A = A
+        for f in fields:
+            if not f in Visitor.M:
+                try:
+                    Visitor.M[f] = A.P(f, memmap='r+', shape=Npixels)
+                except IOError:
+                    Visitor.M[f] = A.P(f, memmap='w+', shape=Npixels)
+            cls.M[f] = Visitor.M[f]
 
-    with sharedmem.Pool(use_threads=False) as pool:
-        def work(i, j, k):
-            var1, w1 = process_box(A, i, j, k, pool)
-            return var1, w1
-        rt = pool.starmap(work, A.yieldwork())
-    var1 = numpy.average(
-            [r[0] for r in rt],
-            weights=[r[1] for r in rt])
+    def __init__(self, box):
+        self.box = box
+        A = self.A
+        fac = A.NmeshLyaBox * A.NmeshFine * A.Nrep / A.BoxSize
+        self.x1lya = A.sightlines.x1 * fac
+        self.x2lya = A.sightlines.x2 * fac
 
-    print 'fine field var', var1
-    var = var0 + var1 + deltalya.var()
-    print 'gaussian-variance is', var
-    numpy.savetxt(A.datadir + '/gaussian-variance.txt', [var])
+    def visit(self, chunk):
+        pass
 
-def process_box(A, i, j, k, pool):
-    """ this will return number of pixels, variance of delta1, and w
-    where w is 0 if no fft on delta1 is done, and 1 if fft is done.
-    idea is we add up variance of delta0, delta1 and lya to get the
-    full variance.
-    """
-    offset = numpy.array([i, j, k], dtype='f8')
-    x1 = A.sightlines.x1 * (A.NmeshLyaEff / A.BoxSize) \
-         - offset[None, :] * (A.NmeshLyaEff / A.Nrep)
-    x2 = A.sightlines.x2 * (A.NmeshLyaEff / A.BoxSize) \
-         - offset[None, :] * (A.NmeshLyaEff / A.Nrep)
-    
-    # xyz is in lya coordinate, relative to the current box
-    t = time.clock()
-    mask = clipline(x1, x2, 
-                (A.NmeshLyaEff / A.Nrep,) * 3, 
-                return_full=False) > 0
-    #print i, j, k, 'clipping took', time.clock() - t
-    mask &= A.sightlines.Zmax > A.sightlines.Zmin
-    if not mask.any(): return 0, 0
+    def getcoarse(self, xyzlya):
+        return 1.0 * xyzlya * self.A.NmeshCoarse / (self.A.NmeshFine * self.A.NmeshLyaBox)
+    def getfine(self, xyzlya):
+        return (xyzlya - self.box.LYAoffset[None, :]) \
+                / self.A.NmeshLyaBox
+    def getqso(self, xyzlya):
+        return 1.0 * (xyzlya - self.box.LYAoffset[None, :]) \
+                / self.A.NmeshLyaBox * self.A.NmeshQSO / self.A.NmeshFine
 
-    truelineid = mask.nonzero()[0]
+    def getpixels(self, chunk, return_full):
+        """ return_full is True, return xyzlya, objectid, pixelid
+            False, return total number of pixels in chunk """
+        s = chunk.getslice()
+        result = \
+            clipline(
+                self.x1lya[s], self.x2lya[s], 
+                self.box.LYAoffset, 
+                self.box.LYAoffset + self.box.LYAsize,
+                return_full=return_full)
+        if return_full:
+            xyzlya, objectid, pixelid = result
+            objectid += chunk.offset
+            return xyzlya, objectid, pixelid
+        else:
+            return result.sum()
 
-    t = time.clock()
+class GeneratePixels(Visitor):
+    @classmethod
+    def prepare(cls, A, Npixels):
+        Visitor.prepare(cls, A, Npixels, [
+            'objectid', 
+            'pixelid', 
+            'Zreal', ]
+            )
 
-    losdisp1 = realize_losdisp(A.power, 
-               offset * (A.BoxSize / A.Nrep),
-               A.Observer,
-               A.SeedTable[i, j, k], A.NmeshFine,
-               A.BoxSize / A.Nrep, Kmin=A.KSplit, order=False)
+    def visit(self, chunk):
+        ps = slice(chunk.PixelStart, chunk.PixelEnd)
+        xyzlya, objectid, pixelid = self.getpixels(chunk, return_full=True)
+        self.M['objectid'][ps] = objectid
+        self.M['pixelid'][ps] = pixelid
+        pos = self.A.BoxSize * xyzlya / (self.A.NmeshEff * self.A.NmeshLyaBox)
+        self.M['Zreal'][ps] = self.A.xyz2redshift(pos)
 
-    delta1, var1 = density.realize(A.power, 
-           A.SeedTable[i, j, k], 
-           A.NmeshFine, 
-           A.BoxSize / A.Nrep, 
-           Kmin=A.KSplit, order=False)
+class AddDelta(Visitor):
+    @classmethod
+    def prepare(cls, A, Npixels):
+        Visitor.prepare(cls, A, Npixels, [
+            'delta']
+            )
 
-    RNG = numpy.random.RandomState(A.SeedTable[i, j, k])
-    Lyatable = RNG.randint(A.NLyaBox, size=A.NmeshFine ** 3)
-    #print i, j, k, 'fft took', time.clock() - t
+    def __init__(self, box):
+        Visitor.__init__(self, box)
+        A = self.A
+        self.delta1, junk = \
+            density.realize(A.power, 
+               A.SeedTable[box.i, box.j, box.k], 
+               A.NmeshFine, 
+               A.BoxSize / A.Nrep, 
+               Kmin=A.KSplit)
 
-    # doing 1024 lines a time
-    for chunk in numpy.array_split(truelineid, 
-               len(truelineid) / 5000 + 1):
-
-        xyzlya, rellineid, pixelid = clipline(x1[chunk], x2[chunk], 
-                    (A.NmeshLyaEff / A.Nrep,) * 3, 
-                     return_lineid=True)
-    
-        assert len(rellineid) > 0
-
-        # pixels contains the pixels in this box, of all lines.
-        pixels = numpy.empty(len(rellineid), dtype=pixeldtype)
-
-        t = time.clock()
-        # recover the original lineid as it has been masked
-        pixels['objectid'] = chunk[rellineid]
-        pixels['pixelid'] = pixelid
-    
-        del [rellineid, pixelid]
-
-        pixels['delta'] = 0
-        pixels['losdisp'] = 0
-
-        # first convert to the coarse coordinate
-        # relative to the global box
-        # so that it is ready for interpolation
-        xyz = xyzlya * (1. * A.NmeshCoarse / A.NmeshLyaEff)
-        xyz += offset[:, None] * A.NmeshCoarse / A.Nrep
-
-        pixels['delta'] += map_coordinates(delta0, xyz, 
+    def visit(self, chunk):
+        ps = slice(chunk.PixelStart, chunk.PixelEnd)
+        xyzlya, objectid, pixelid = self.getpixels(chunk, return_full=True)
+        xyzcoarse = self.getcoarse(xyzlya)
+        self.M['delta'][ps] = map_coordinates(delta0, xyzcoarse.T, 
                 mode='wrap', order=4, prefilter=False)
-        pixels['losdisp'] += map_coordinates(losdisp0, xyz, 
-                mode='wrap', order=4, prefilter=False)
 
-        # now goto the boxsize coordinate
-        # to evaluate the redshift
-        xyz *= A.BoxSize / A.NmeshCoarse
-        pixels['Zreal'] = A.xyz2redshift(xyz)
-  
-        # first convert to the fine mesh coordinate
-        # relative to the fine boxes.
-        xyz = xyzlya / A.NmeshLya
-        # no need to remove the offset for interpolation
-        # it's periodic. 
-        #  xyz -= offset * A.NmeshFineEff / A.Nrep
+        xyzfine = self.getfine(xyzlya)
+        linear = numpy.ravel_multi_index(xyzfine.T, 
+                (self.A.NmeshFine, ) * 3, mode='raise')
+        self.M['delta'][ps] += self.delta1.flat[linear]
 
-        # add in the lya scale power
-        linear = numpy.ravel_multi_index(xyz, 
-                (A.NmeshFine, ) * 3, mode='wrap')
-        pixels['delta'] += delta1.flat[linear]
-        pixels['losdisp'] += losdisp1.flat[linear]
-#        pixels['delta'] += map_coordinates(delta1, xyz, 
-#                mode='wrap', order=4, prefilter=False)
-#        pixels['losdisp'] += map_coordinates(losdisp1, xyz, 
-#                mode='wrap', order=4, prefilter=False)
-
-        whichLyaBox = Lyatable[linear]
-
-        # no need to wrap, ravel_multi_index will do it
+class AddLya(Visitor):
+    @classmethod
+    def prepare(cls, A, Npixels):
+        Visitor.prepare(cls, A, Npixels, [
+            'delta']
+            )
+    def __init__(self, box):
+        Visitor.__init__(self, box)
+        A = self.A
+        RNG = numpy.random.RandomState(
+               A.SeedTable[box.i, box.j, box.k] 
+            )
+        self.Lyatable = numpy.empty(A.NmeshFine ** 3, dtype='i2')
+        for i in range(A.NmeshFine):
+            self.Lyatable[i * A.NmeshFine ** 2:(i+1) * A.NmeshFine ** 2] \
+                = RNG.randint(A.NLyaBox, size=A.NmeshFine ** 2)
+    def visit(self, chunk):
+        ps = slice(chunk.PixelStart, chunk.PixelEnd)
+        xyzlya, objectid, pixelid = self.getpixels(chunk, return_full=True)
+        xyzfine = self.getfine(xyzlya)
+        linear = numpy.ravel_multi_index(xyzfine.T, 
+                (self.A.NmeshFine, ) * 3, mode='raise')
+        whichLyaBox = self.Lyatable[linear]
         ind = numpy.ravel_multi_index(
-                (whichLyaBox, xyzlya[0], xyzlya[1], xyzlya[2]), 
+                (whichLyaBox, xyzlya[..., 0], xyzlya[..., 1], xyzlya[..., 2]), 
                 deltalya.shape, mode='wrap')
-        pixels['delta'] += deltalya.flat[ind]
+        self.M['delta'][ps] += deltalya.flat[ind]
 
-        pixels['Zred'] = Zred(A, pixels['Zreal'], pixels['losdisp'])
-        #print i, j, k, 'interpolation', 'done', time.clock() - t
-        with pool.lock:
-            t = time.clock()
-            print i, j, k, 'writing out', len(pixels)
-            for field in ['delta', 'objectid', 'pixelid', 'losdisp',
-                          'Zreal', 'Zred']:
-                pixels[field].tofile(F[field])
-                F[field].flush()
-            print i, j, k, 'writing out', 'done', time.clock() - t
-    return var1, 1
+class Estimator(Visitor):
+    @classmethod
+    def prepare(cls, A):
+        Visitor.prepare(cls, A, 0, [])
 
-def Zred(A, Z0, losdisp):
-    a = 1 / (1. + Z0)
-    Ea = A.cosmology.Ea
-    H0 = A.H0
-    Dplus = A.cosmology.Dplus
-    FOmega = A.cosmology.FOmega
-    D = Dplus(a) / Dplus(1.0)
-    losvel = a * D * FOmega(a) * Ea(a) * H0 * losdisp
-    # moving away is positive
-    dz = - losvel / A.C
-    Zred = (1 + dz) * (1 + Z0) - 1
-    return Zred
+    def visit(self, chunk):
+        chunk.Npixels[...] = self.getpixels(chunk, return_full=False)
+
+def AddDisp(d, field):
+  class AddDisp(Visitor):
+    @classmethod
+    def prepare(cls, A, Npixels):
+        Visitor.prepare(cls, A, Npixels, [
+            field]
+            )
+    def __init__(self, box):
+        Visitor.__init__(self, box)
+        A = self.A
+        self.disp1, junk = \
+            density.realize(A.power,
+                A.SeedTable[box.i, box.j, box.k], 
+                A.NmeshQSO,
+                A.BoxSize / A.Nrep, disp=d, Kmin=A.KSplit
+                )
+        self.disp1 = spline_filter(self.disp1, 
+                order=4, output=numpy.dtype('f4'))
+    def visit(self, chunk):
+        ps = slice(chunk.PixelStart, chunk.PixelEnd)
+        xyzlya, objectid, pixelid = self.getpixels(chunk, return_full=True)
+        xyzcoarse = self.getcoarse(xyzlya)
+        xyzqso = self.getqso(xyzlya)
+
+        self.M[field][ps] = map_coordinates(disp0[d], 
+                xyzcoarse.T,
+                mode='wrap', order=4, prefilter=False)
+
+        self.M[field][ps] += map_coordinates(self.disp1, 
+                xyzqso.T,
+                mode='wrap', order=4, prefilter=False)
+  return AddDisp
+

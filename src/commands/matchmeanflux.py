@@ -5,12 +5,11 @@ from args import pixeldtype
 from cosmology import interp1d
 
 def main(A):
-    """find the normalization factor matching the mean flux"""
+    """find the normalization factor matching the mean flux,
+       this only use Zred, because redshift distortion is small.
+       """
   
-    if A.RedshiftDistortion:
-        Z = A.P('Zred', memmap='r')
-    else:
-        Z = A.P('Zreal', memmap='r')
+    Z = A.P('Zreal', memmap='r')
   
     rawflux = A.P('rawflux', memmap='r')
     zbins = numpy.linspace(Z.min(), Z.max(), 100, endpoint=True)
@@ -24,7 +23,7 @@ def main(A):
     ind = dig.argsort()
     dig = dig[ind]
   
-    with sharedmem.Pool(use_threads=True) as pool:
+    with sharedmem.Pool() as pool:
         for i in range(len(zcenter)):
             left = dig.searchsorted(i + 1, side='left')
             right = dig.searchsorted(i + 1, side='right')
@@ -35,10 +34,12 @@ def main(A):
 
             subset.sort()
             F = rawflux[subset]
+            chunksize = 1024 * 24
             def cost(az):
-                def work(F):
-                    return (F[F!=0] ** az[0]).sum(dtype='f8')
-                Fsum = numpy.sum(pool.starmap(work, pool.zipsplit((F,))))
+                def work(i):
+                    G = F[i:i+chunksize]
+                    return (G[G!=0] ** az[0]).sum(dtype='f8')
+                Fsum = numpy.sum(pool.map(work, range(0, len(F), chunksize)))
                 Fmean = Fsum / F.size
                 dist = (Fmean - meanflux_expected[i])
                 return dist
@@ -56,7 +57,7 @@ def main(A):
     print 'normalizing'
     AZ = interp1d(zcenter, afactor, fill_value=1.0, kind=4)
     chunksize = 1048576
-    fluxfile = A.P('flux', justfile='w')
+    fluxfile = A.F('flux', mode='a')
     for i in range(0, len(rawflux), chunksize):
         SL = slice(i, i + chunksize)
         flux = numpy.zeros(rawflux[SL].shape, dtype=pixeldtype['flux'])

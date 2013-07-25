@@ -2,17 +2,20 @@ import numpy
 from scipy.ndimage import spline_filter
 from scipy.integrate import romberg
 from snakefill import snakefill
+from scipy.interpolate import interp1d
 
-def realize(PowerSpec,
-            seed, Nsample, BoxSize, 
+def realize(power,
+            seed, Nsample, 
+            BoxSize, 
             Kmin=None,
             Kmax=None,
-            kernel=lambda kx, ky, kz, k: 1,
-            order=False):
+            disp=False,
+            kernel=None,
+            ):
   """
       realize a powerspectrum.
-      PowerSpec must be in gadget unit, (2 pi kpc/h) ** 3
-
+      power (k, p) must be in gadget unit, (2 pi kpc/h) ** 3
+    
       default is to make delta field.
 
       to get displacement field, use
@@ -28,16 +31,25 @@ def realize(PowerSpec,
       presumbaly power from region will be added as large
       scale power from a different realization, with interpolation.
   """
+  dispkernel = [
+            lambda kx, ky, kz, k: 1j * kx * k ** -2,
+            lambda kx, ky, kz, k: 1j * ky * k ** -2,
+            lambda kx, ky, kz, k: 1j * kz * k ** -2
+  ]
+  PowerSpec = interp1d(power[0], power[1], kind='linear', copy=True, 
+                         bounds_error=False, fill_value=0)
   rng = numpy.random.RandomState(seed)
   K0 = 2 * numpy.pi / BoxSize
-  A = snakefill((Nsample, Nsample, Nsample / 2 + 1))
-  A = A.ravel().argsort()
   gauss = rng.normal(scale=2 ** -0.5, 
             size=(Nsample, Nsample, Nsample / 2 + 1, 2)
           ).view(dtype=numpy.complex128).reshape(Nsample, Nsample, Nsample / 2 + 1)
+
+  shuffle = snakefill((Nsample, Nsample, Nsample / 2 + 1))
+  shuffle = shuffle.ravel().argsort()
   deltak = numpy.empty_like(gauss)
-  deltak.ravel()[A] = gauss.ravel()
-  del gauss, A
+  deltak.ravel()[shuffle] = gauss.ravel()
+  del gauss, shuffle
+
   #deltak = gauss
   # convolve gauss with powerspec to delta_k, stored in deltak.
   for i in range(Nsample):
@@ -62,7 +74,11 @@ def realize(PowerSpec,
       highcut = K <= Kmax
       #numpy.exp( - (K / Kmax) ** 2)
       deltak[i] *= highcut
-    deltak[i] *= (PK * K0 ** 1.5) * kernel(i * K0, j * K0, k * K0, K)
+    deltak[i] *= (PK * K0 ** 1.5)
+    if kernel is not None:
+      deltak[i] *= kernel(i * K0, j * K0, k * K0, K)
+    if disp is not False:
+      deltak[i] *= dispkernel[disp](i * K0, j * K0, k * K0, K)
     deltak[i][numpy.isnan(deltak[i])] = 0
   
   deltak[Nsample / 2, ...] = 0
@@ -74,8 +90,6 @@ def realize(PowerSpec,
   # fix the fftpack normalization
   delta *= Nsample ** 3
   var = delta.var()
-  if order is not False:
-    delta = spline_filter(delta, order=order)
   return numpy.float32(delta), var
 
 def lognormal(delta, std, out=None):
@@ -89,53 +103,6 @@ def lognormal(delta, std, out=None):
     numpy.exp(out, out=out)
     out -= 1  
     return out
-
-def realize_dispr(PowerSpec, cornerpos, observerpos,
-        seed, Nsample, BoxSize, 
-        Kmin=None, Kmax=None, order=False):
-    dispkernel = [
-            lambda kx, ky, kz, k: 1j * kx * k ** -2,
-            lambda kx, ky, kz, k: 1j * ky * k ** -2,
-            lambda kx, ky, kz, k: 1j * kz * k ** -2]
-    losdisp = numpy.zeros((Nsample, Nsample, Nsample), dtype='f4')
-    for ax in range(3):
-        disp, var = realize(PowerSpec, seed=seed,  
-              Nsample=Nsample, BoxSize=BoxSize, 
-              Kmin=Kmin, Kmax=Kmax,
-              kernel=dispkernel[ax])
-        for i in range(Nsample):
-            j, k = numpy.ogrid[0:Nsample, 0:Nsample]
-            x = cornerpos[0] + i * BoxSize - observerpos[0]
-            y = cornerpos[1] + j * BoxSize - observerpos[1]
-            z = cornerpos[2] + k * BoxSize - observerpos[2]
-            disp[i] *= ([-x, -y, -z][ax])
-            r = (x ** 2 + y ** 2 + z ** 2) ** 0.5
-            disp[i][r!=0] /= r[r!=0]
-            disp[i][r==0] = 0
-        losdisp += disp
-        del disp
-
-    if order is not False:
-        losdisp = spline_filter(losdisp, order=order)
-    return losdisp
-
-def realize_dispz(PowerSpec, cornerpos, observerpos,
-            seed, Nsample, BoxSize, 
-            Kmin=None, Kmax=None, order=False):
-    """ observerpos is unused."""
-    dispkernel = [
-      lambda kx, ky, kz, k: 1j * kx * k ** -2,
-      lambda kx, ky, kz, k: 1j * ky * k ** -2,
-      lambda kx, ky, kz, k: 1j * kz * k ** -2]
-    ax = 2
-    losdisp, var = realize(PowerSpec, seed=seed, 
-           Nsample=Nsample, 
-           BoxSize=BoxSize, Kmin=Kmin, Kmax=Kmax,
-           kernel=dispkernel[ax])
-    losdisp *= -1
-    if order is not False:
-        losdisp = spline_filter(losdisp, order=order)
-    return losdisp
 
 def sigma(power, R):
     def integrand(k):
