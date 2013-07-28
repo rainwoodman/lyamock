@@ -21,24 +21,28 @@ def main(A):
   
     del sorted, objectid
     data = lambda : None
-    data.Zreal = A.P('Zreal')
-    data.delta = A.P('delta')
+    data.Zreal = A.P('Zreal', memmap='r')
+    data.delta = A.P('delta', memmap='r')
     if not A.skipred:
-        data.disp = numpy.array([
-            A.P('dispx'),
-            A.P('dispy'),
-            A.P('dispz')
-            ]).T
+        if A.Geometry == 'Test':
+            data.disp = (
+                None,
+                None,
+                A.P('dispz', memmap='r') )
+        else:
+            data.disp = (
+                A.P('dispx', memmap='r'),
+                A.P('dispy', memmap='r'),
+                A.P('dispz', memmap='r') )
 
     if not A.usepass1:
-        data.flux = A.P('flux')
+        data.flux = A.P('flux', memmap='r')
  
     disp_to_vel = A.cosmology.disp_to_vel
     Dc = A.cosmology.Dc
     redshift_dist = A.cosmology.redshift_dist
 
-    with sharedmem.Pool() as pool:
-      def work(i):
+    def makespectra(i):
         Zmax, Zmin, Zqso = (A.sightlines.Zmax[i], 
                              A.sightlines.Zmin[i],
                              A.sightlines.Z[i])
@@ -59,31 +63,39 @@ def main(A):
             if not A.usepass1:
                 flux = data.flux[subset]
         if not A.skipred:
-            disp = numpy.einsum('ij, j -> i', data.disp[subset], dir)
+            if A.Geometry == 'Test':
+                disp = data.disp[2][subset]
+            else:
+                disp = data.disp[0][subset] * dir[0] \
+                     + data.disp[1][subset] * dir[1] \
+                     + data.disp[2][subset] * dir[2]
+
             a = 1 / (Zreal + 1)
             vel = disp_to_vel(disp / A.DH, a)
             Zred = 1 / redshift_dist(vel, a) - 1
 
+            if A.Geometry == 'Test':
+                # not exactly right but will move pixels
+                # into the box
+                disp[Zred > Zmax] -= A.BoxSize
+                disp[Zred < Zmin] += A.BoxSize
+                vel = disp_to_vel(disp / A.DH, a)
+                Zred = 1 / redshift_dist(vel, a) - 1
+
+        # bins are uniform in comoving distance
+        Dcmax = Dc(1 / (1 + Zmax))
+        Dcmin = Dc(1 / (1 + Zmin))
         if A.Geometry == 'Test':
-            # in test mode, the bins are uniform in comoving distance
-            Dcmax = Dc(1 / (1 + Zmax))
-            Dcmin = Dc(1 / (1 + Zmin))
-            bins = 1 / Dc.inv(numpy.linspace(Dcmin, Dcmax, A.Npixel + 1,
-                endpoint=True)) - 1
-            R1 = Dcmin * A.DH
-            R2 = Dcmax * A.DH
+            bins = numpy.linspace(Dcmin, Dcmax, A.Npixel + 1, endpoint=True)
         else:
-            R1 = ((x1 - A.BoxSize * 0.5)** 2).sum() ** 0.5
-            R2 = ((x2 - A.BoxSize * 0.5)** 2).sum() ** 0.5
-          #  llMin, llMax = numpy.log10([1026., 1216.])
-          #  lambdagrid = 10 ** numpy.linspace(llMin, llMax, A.Npixel + 1, endpoint=True)
-            Npix = int((1216 - 1026) * (1 + Zqso))
-            lambdagrid = numpy.linspace(1026., 1216., Npix + 1, endpoint=True)
-            bins = (Zqso + 1.) * lambdagrid / 1216. - 1
+            # about 12 nm per bin (1216 - 1026 = 190.)
+            bins = numpy.linspace(Dcmin, Dcmax, int(150 * (1 + Zqso)), endpoint=True)
+        R1 = Dcmin * A.DH
+        R2 = Dcmax * A.DH
 
         spectra = numpy.empty(len(bins) - 1, dtype=bitmapdtype)
 
-        spectra['Z'] = (bins[1:] + bins[:-1]) * 0.5
+        spectra['Z'] = 1 / A.cosmology.Dc.inv((bins[1:] + bins[:-1]) * 0.5) - 1
         spectra['lambda'] = (spectra['Z'] + 1) / (1 + Zqso) * 1216.
   
         R = A.cosmology.Dc(1 / (1 + spectra['Z'])) * A.DH
@@ -93,22 +105,31 @@ def main(A):
                   [x1[d], x2[d]])
         spectra['objectid'] = i
 
+        pixwidth = (Dcmax - Dcmin) / len(Zreal)
+        binwidth = numpy.diff(bins)
+        Xreal = A.cosmology.Dc(1 / (1 + Zreal))
+        Xred  = A.cosmology.Dc(1 / (1 + Zred))
         # do the real
-        Wreal = splat(Zreal, 1, bins)
+        Wreal = splat(Xreal, 1, bins)
         assert numpy.allclose(Wreal.sum(), len(Zreal))
         Wreal = Wreal[1:-1]
 
         if not A.usepass1:
-            spectra['flux'] = splat(Zreal, flux, bins)[1:-1] / Wreal
-        spectra['delta'] = splat(Zreal, delta, bins)[1:-1] / Wreal
+            spectra['flux'] = splat(Xreal, flux, bins)[1:-1] / Wreal
+        spectra['delta'] = splat(Xreal, 1 + delta, bins)[1:-1] \
+                * (pixwidth / binwidth) - 1
         spectra['wreal'] = Wreal
 
+        if i == 0:
+            numpy.savez('spectra.npz', spectra=spectra, Zreal=Zreal,
+                    delta=delta, bins=bins, binwdith=binwidth)
         # do the red
         if not A.skipred:
-            Wred = splat(Zred, 1, bins)[1:-1]
+            Wred = splat(Xred, 1, bins)[1:-1]
             if not A.usepass1:
-                spectra['fluxred'] = splat(Zred, flux, bins)[1:-1] / Wred
-            spectra['deltared'] = splat(Zred, delta, bins)[1:-1] / Wred
+                spectra['fluxred'] = splat(Xred, flux, bins)[1:-1] / Wred
+            spectra['deltared'] = splat(Xred, 1 + delta, bins)[1:-1] \
+                * (pixwidth / binwidth) - 1
             spectra['wred'] = Wred
 
         # these points have no samples and we fake them by directly using the
@@ -116,16 +137,31 @@ def main(A):
         # lack = W[1:-1] == 0
         # bitmap['F'][i][lack] = A.FPGAmeanflux(1 / (1 + bitmap['Z'][i][lack]))
         # no we actually leave them NaN
-        spectra = spectra[ \
-                (~numpy.isnan(spectra['flux']) & \
-                 ~numpy.isnan(spectra['fluxred'])) \
-                 ]
-        length[i] = len(spectra)
-        with pool.ordered:
-            with A.F('bitmap', mode='a') as f:
-                spectra.tofile(f)
-                f.flush()
-      pool.map(work, numpy.arange(len(length)))
+        if A.Geometry != 'Test':
+            spectra = spectra[ \
+                    (~numpy.isnan(spectra['flux']) & \
+                     ~numpy.isnan(spectra['fluxred']) & \
+                     ~numpy.isnan(spectra['delta']) & \
+                     ~numpy.isnan(spectra['deltared'])) \
+                     ]
+        return spectra
+    chunksize = 1024
+    with sharedmem.Pool() as pool:
+        def work(start):
+            lines = []
+            for i in range(*slice(start, start +
+                chunksize).indices(len(A.sightlines))):
+                spectra = makespectra(i)
+                length[i] = len(spectra)
+                lines.append(spectra)
+
+            with pool.ordered:
+                with A.F('bitmap', mode='a') as f:
+                    for spectra in lines:
+                        spectra.tofile(f)
+                    f.flush()
+
+        pool.map(work, range(0, len(A.sightlines), chunksize))
 
     offset[1:] = length.cumsum()[:-1]
     offset[0] = 0
