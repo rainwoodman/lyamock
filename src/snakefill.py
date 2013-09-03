@@ -17,7 +17,10 @@ def snakefill(shape):
         for the flatened array, use
         snakefill(array).flat.argsort()
     """
-    A = numpy.zeros(shape, 'i8')
+    if numpy.max(shape) < 1024:
+        A = numpy.zeros(shape, 'i4')
+    else:
+        A = numpy.zeros(shape, 'i8')
     istart = 0
     for n in range(shape[0] // 2 + 1):
         istart = makeseq(n, A, istart)
@@ -100,7 +103,7 @@ def makeseq(n, A, istart):
             continue
         if numpy.any([(x is NEGAX or x is NEGPT) and d == Ndim - 1 \
                 for d, x in enumerate(points)]):
-            # skip last ax if we are corrossing negative part
+            # skip last ax if we are crrossing negative part
             continue
         translate(points)
         l = length(points)

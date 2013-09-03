@@ -1,3 +1,4 @@
+raise deprecated
 import numpy
 from cosmology import interp1d
 from args import pixeldtype2

@@ -12,6 +12,73 @@ def idiv_trunc(x, y, updown):
     #print 'idve_trun', x, y, updown, 1.0 * x / y, rt
     return rt
 
+def drawline(x1, x2, sep, min=None, max=None, return_full=False):
+    """ draw a line from x1 to (at least) x2, with pixel separation
+        sep. only preserve points in the box given by >=min and < max.
+        x1, x2 can be a series of lines. 
+        (this is not optimized yet, still using an explicit loop)
+    """
+    x1, x2 = numpy.atleast_2d(x1, x2)
+    dir = x2 - x1
+    L = ((x2 - x1) ** 2).sum(axis=-1) ** 0.5
+    dir = dir * ((1.0 * sep) / L[:, None])
+    rt = []
+    for i in range(len(x1)):
+        N = numpy.arange(numpy.ceil(L[i] / sep))[:, None]
+        pt = x1[i] + dir[i] * N
+        if min is not None and max is not None:
+            goodmask = numpy.all(pt >= min, axis=-1)
+            goodmask &= numpy.all(pt < max, axis=-1)
+            pt = pt[goodmask]
+        rt.append(pt)
+    if not return_full:
+        return numpy.array([len(r) for r in rt], dtype='intp')
+    else:
+        return numpy.concatenate(rt), numpy.repeat(
+                numpy.range(len(x1)),[len(r) for r in rt]), None
+
+def liangbaskey(x1, x2, min, max):
+    """
+        do the clipping with liang baskey, returns
+        tmin, tmax, T
+
+        the line goes from 0 to T; T, tmin, tmax are integers,
+        rounded to the nearest integer.
+        x1, x2, min, max must be all integers.
+    """
+    x1 = numpy.asarray(x1)
+    assert x1.dtype.kind == 'i'
+    Dx = x2 - x1
+    T = numpy.abs(Dx).max(axis=-1)
+    bad = Dx == 0
+    #protect against 0
+    Dx[bad] = 1
+    # we want to round towards 0
+    min = numpy.array(min, dtype='intp')
+    max = numpy.array(max, dtype='intp')
+    t1 = idiv_trunc((min - x1) * T[..., None], Dx, numpy.sign(Dx))
+    t2 = idiv_trunc((max - x1) * T[..., None] - 1, Dx, numpy.sign(Dx) * -1)
+    Dx[bad] = 0
+    outofbound = ((min - x1)[bad] > 0) | ((max - x1)[bad] <= 0)
+    Tbad = numpy.tile(T[..., None], (1, 3))[bad]
+    
+    t1[bad] = numpy.where(outofbound, Tbad + 1, -1)
+    t2[bad] = numpy.where(outofbound, -1, Tbad + 1)
+
+    tmin = numpy.where(Dx >= 0, t1, t2)
+    tmax = numpy.where(Dx >= 0, t2, t1)
+    tmin = tmin.max(axis=-1)
+    tmax = tmax.min(axis=-1)
+
+    tmin[tmin < 0] = 0
+    tmin[tmin > T] = T[tmin > T] + 1
+    tmax[tmax < 0] = -1
+    tmax[tmax > T] = T[tmax > T]
+
+    #print t1, t2, tmin, tmax, numpy.sign(Dx) * -1
+    # t range from tmin to tmax, inclusive
+    return tmin, tmax, T
+
 def clipline(x1, x2, min, max, return_full=True):
     """
     returns the number of pixels per line
@@ -63,35 +130,8 @@ def clipline(x1, x2, min, max, return_full=True):
     x2 = numpy.intp(x2)
     x1 = numpy.intp(x1)
     Dx = x2 - x1
-    T = numpy.abs(Dx).max(axis=-1)
-    bad = Dx == 0
-    #protect against 0
-    Dx[bad] = 1
-    # we want to round towards 0
-    min = numpy.array(min, dtype='intp')
-    max = numpy.array(max, dtype='intp')
-    t1 = idiv_trunc((min - x1) * T[..., None], Dx, numpy.sign(Dx))
-    t2 = idiv_trunc((max - x1) * T[..., None] - 1, Dx, numpy.sign(Dx) * -1)
-    Dx[bad] = 0
-    outofbound = ((min - x1)[bad] > 0) | ((max - x1)[bad] <= 0)
-    Tbad = numpy.tile(T[..., None], (1, 3))[bad]
-    
-    t1[bad] = numpy.where(outofbound, Tbad + 1, -1)
-    t2[bad] = numpy.where(outofbound, -1, Tbad + 1)
 
-    tmin = numpy.where(Dx >= 0, t1, t2)
-    tmax = numpy.where(Dx >= 0, t2, t1)
-    tmin = tmin.max(axis=-1)
-    tmax = tmax.min(axis=-1)
-
-    tmin[tmin < 0] = 0
-    tmin[tmin > T] = T[tmin > T] + 1
-    tmax[tmax < 0] = -1
-    tmax[tmax > T] = T[tmax > T]
-
-    #print t1, t2, tmin, tmax, numpy.sign(Dx) * -1
-    # t range from tmin to tmax, inclusive
-
+    tmin, tmax, T = liangbaskey(x1, x2, min, max)
     Npixels = tmax - tmin + 1
     Npixels[Npixels < 0] = 0
 
@@ -113,7 +153,7 @@ def clipline(x1, x2, min, max, return_full=True):
     # remove the edge points
     return x, o, t
 
-def test():
+def testclipline():
     v = numpy.array(([0, 0], [0, 2], [2, 0], [2, 2]))
 
     x1 = [  9968.60423495 ,17406.97619585 ,40308.06971767]
@@ -140,5 +180,7 @@ def test():
         assert n == clipline([x1], [x2], (0, 0), (2, 2), return_full=False)
         assert n == clipline([x2], [x1], (0, 0), (2, 2), return_full=False)
         
+def testdrawline():
+    print drawline([0, 0], [10, 10], 1, [2, 2], [5, 5])
 if __name__ == '__main__':
-    test()
+    testdrawline()

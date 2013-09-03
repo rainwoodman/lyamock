@@ -44,19 +44,45 @@ Note that in GADGET the velocity saved in snapshot file is
 $\sqrt{a}\mathbf{v}$.
 
 \section{Log Normal}
-See Bi \& Davidsen, 1997. To avoid negative density.
+Bi \& Davidsen, 1997 seems to be wrong:
 \[
     \delta_b (x) = \exp\left[
         \delta_0 (\mathbf{x}) 
       - \frac{\left<\delta^2_0\right>}{2}
-    \right],
+    \right] - 1,
 \]
 where $\delta_0$ is the baryon gaussian derived from 
  matter gaussian,
 \[
     \delta_0(\mathbf{k}) = \frac{\delta_\mathrm{DM}
     (\mathbf{k})}{1 + x^2_b k^2}.
+\].
+If we want to preserve std and mean after the lognormal
+transformation, another formula has to be used.
+
+Recall that the lognormal transformation (Wikipedia) is
+\[
+    X = \exp\left[\mu + \frac{\sigma}{\Sigma}
+    \delta_0\right].
 \]
+Now we require mean to be 1 and std to be $\Sigma$
+
+\[
+    \mu + \frac{1}{2}\sigma^2 = 0,
+\]
+\[
+    \left(\exp (\sigma^2)  - 1\right) \exp(2\mu + \sigma ^2)
+    = \Sigma^2.
+\]
+Solve this, obtaining,
+\[
+    \sigma^2 = \log (\Sigma^2 + 1),
+\]
+\[
+    \mu = - \frac{1}{2} \sigma^2,
+\]
+and the correct transformation.
+
 The comoving scale, $x_b$ is $\sim \unit[0.1]{h^{-1}Mpc}$.
 For $k \ll \frac{2 \pi}{x_b} \approx \unit[10]{h
     Mpc^{-1}}$, we have

@@ -4,6 +4,52 @@ from scipy.integrate import romberg
 from snakefill import snakefill
 from scipy.interpolate import interp1d
 
+import pyfftw
+
+class begin_irfftn(numpy.ndarray):
+    def __new__(cls, shape, dtype):
+        """ shape is the shape of the complezx input,
+            call finish_irfftn to get the output
+        """
+        input = pyfftw.n_byte_align_empty(shape, 64, dtype, order='C')
+        output = input.view(dtype=input.real.dtype)[..., :-2]
+        input = input.view(type=cls)
+        input.output = output
+        input.plan = pyfftw.FFTW(input, output,
+                axes=range(len(shape)),
+                direction='FFTW_BACKWARD')
+        return input
+
+def build_shuffle(shape):
+    shuffle = snakefill(shape)
+    shuffle = shuffle.ravel().argsort()
+    if numpy.product(shape) < 1024 ** 3:
+        shuffle = numpy.int32(shuffle)
+    return shuffle
+
+def finish_irfftn(input):
+    input.plan.execute()
+    output = input.output
+    del input.plan
+    del input.output
+    return output
+
+def execute_irfftn(input):
+    input.plan.execute()
+    output = input.output
+    return output
+
+def gaussian(deltak, shuffle, seed):
+    rng = numpy.random.RandomState(seed)
+    chunksize = 1024 * 1024 
+    for i in range(0, len(shuffle), chunksize):
+        s = slice(i, i + chunksize)
+        ss = shuffle[s]
+        gausstmp = rng.normal(scale=2 ** -0.5, size=len(ss)* 2
+            ).view(dtype=numpy.complex128)
+        deltak.put(ss, gausstmp)
+gengaussian = gaussian
+
 def realize(power,
             seed, Nsample, 
             BoxSize, 
@@ -11,6 +57,8 @@ def realize(power,
             Kmax=None,
             disp=False,
             kernel=None,
+            gaussian=None,
+            return_deltak=False
             ):
   """
       realize a powerspectrum.
@@ -38,19 +86,15 @@ def realize(power,
   ]
   PowerSpec = interp1d(power[0], power[1], kind='linear', copy=True, 
                          bounds_error=False, fill_value=0)
-  rng = numpy.random.RandomState(seed)
   K0 = 2 * numpy.pi / BoxSize
-  gauss = rng.normal(scale=2 ** -0.5, 
-            size=(Nsample, Nsample, Nsample / 2 + 1, 2)
-          ).view(dtype=numpy.complex128).reshape(Nsample, Nsample, Nsample / 2 + 1)
+  if gaussian is None:
+      gaussian = begin_irfftn((Nsample, Nsample, Nsample // 2 + 1),
+            dtype=numpy.complex64)
+      shuffle = build_shuffle((Nsample, Nsample, Nsample //2 + 1))
+      gengaussian(gaussian, shuffle, seed)
+      del shuffle
 
-  shuffle = snakefill((Nsample, Nsample, Nsample / 2 + 1))
-  shuffle = shuffle.ravel().argsort()
-  deltak = numpy.empty_like(gauss)
-  deltak.ravel()[shuffle] = gauss.ravel()
-  del gauss, shuffle
-
-  #deltak = gauss
+  deltak = gaussian
   # convolve gauss with powerspec to delta_k, stored in deltak.
   for i in range(Nsample):
     # loop over i to save memory
@@ -81,16 +125,31 @@ def realize(power,
       deltak[i] *= dispkernel[disp](i * K0, j * K0, k * K0, K)
     deltak[i][numpy.isnan(deltak[i])] = 0
   
-  deltak[Nsample / 2, ...] = 0
-  deltak[:, Nsample / 2, :] = 0
-  deltak[:, :, Nsample / 2] = 0
+  h = Nsample // 2
+  j = numpy.arange(1, h)
+  for i in range(1, h):
+      deltak[Nsample - i, Nsample - j, h] = numpy.conjugate(deltak[i, j, h])
+      deltak[Nsample - i, Nsample - j, 0] = numpy.conjugate(deltak[i, j, 0])
+      deltak[Nsample - i, j, 0] = numpy.conjugate(deltak[i, Nsample - j, 0])
+      deltak[i, Nsample - j, 0] = numpy.conjugate(deltak[Nsample - i, j, 0])
+      deltak[Nsample - i, 0, 0] = numpy.conjugate(deltak[i, 0, 0])
+      deltak[0, Nsample - i, 0] = numpy.conjugate(deltak[0, i, 0])
 
-  delta = numpy.fft.irfftn(deltak)
-  del deltak
+  deltak.imag[0, 0, 0] = 0
+
+  deltak[h, ...] = 0
+  deltak[:, h, :] = 0
+  deltak[..., h] = 0
+
+  if return_deltak: 
+      deltak_copy = deltak.copy()
+  delta = execute_irfftn(deltak)
   # fix the fftpack normalization
-  delta *= Nsample ** 3
+  # no need for fftw delta *= Nsample ** 3
+  if return_deltak:
+      return delta, deltak_copy
   var = delta.var()
-  return numpy.float32(delta), var
+  return delta, var
 
 def lognormal(delta, std, out=None):
     """mean(delta)  shall be zero"""
@@ -99,7 +158,11 @@ def lognormal(delta, std, out=None):
       out = delta.copy()
     else:
       out[...] = delta
-    out -= std * std * 0.5
+    #sigma = numpy.log(std ** 2 + 1) ** 0.5
+    #mu =  - sigma ** 2 / 2
+    #out *= sigma / std
+    mu = - std ** 2 * 0.5
+    out += mu
     numpy.exp(out, out=out)
     out -= 1  
     return out

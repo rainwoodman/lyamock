@@ -1,67 +1,64 @@
 import numpy
+from splat import splat
 import sharedmem
-from scipy.optimize import leastsq
-from args import pixeldtype
+from args import pixeldtype, bitmapdtype
 from cosmology import interp1d
+from scipy.optimize import leastsq
+
+def deltatotau(A, delta, tau, Zreal):
+    afactor = findafactor(A, delta, Zreal)
+    chunksize = 1024 * 1024 * 4
+    def work(i):
+        s = slice(i, i + chunksize)
+        tau[s] =-afactor(Zreal[s])* numpy.exp(delta[s])
+    with sharedmem.Pool() as pool:
+        pool.map(work, range(0, len(Zreal), chunksize))
+
+def findafactor(A, delta, Zreal):
+    Nbins = 15
+
+    Rmin = A.sightlines.Rmin.min()
+    Rmax = A.sightlines.Rmax.max()
+    Rbins = numpy.linspace(Rmin, Rmax, Nbins + 1, endpoint=True)
+    zbins = 1 / A.cosmology.Dc.inv(Rbins / A.DH) - 1
+    afactor = numpy.empty(Nbins)
+    Rcenter = (Rbins[1:] + Rbins[:-1]) * 0.5
+    Zcenter = 1 / A.cosmology.Dc.inv(Rcenter / A.DH) - 1
+    afactor[-1] = 1.0
+    Zreal = Zreal[numpy.random.uniform(size=len(Zreal)) < 0.01]
+    dig = numpy.digitize(Zreal, zbins)
+    for i in range(len(Rbins) - 1):
+        d = delta[dig == i + 1]
+        print Zcenter[i], 'npixels=', len(d)
+        a = A.cosmology.Dc.inv(Rcenter[i] / A.DH)
+        expected = A.FPGAmeanflux(a)
+        afactor[i] = findoneafactor(A, d, expected, afactor[i-1])
+        print Zcenter[i], 'afactor', afactor[i]
+    AZ = interp1d(Rcenter, afactor, fill_value=1.0, kind=4)
+    numpy.savez('afactor.npz', R=Rcenter, a=afactor)
+    return AZ
+
+def findoneafactor(A, delta, expected, hint):
+    if len(delta) == 0:
+        return 1.0
+    def cost(afactor):
+        chunksize = 1024 * 16
+        def work(i):
+            s = slice(i, i + chunksize)
+            rawflux = numpy.exp(-afactor * numpy.exp((1 + delta[s])))
+            rawflux[numpy.isnan(rawflux)] = 0
+            return rawflux.sum(dtype='f8')
+        with sharedmem.MapReduce() as pool:
+            total = numpy.sum(pool.map(work, range(0, len(delta), chunksize)))
+        return total / len(delta) - expected
+    p = leastsq(cost, hint, full_output=False)
+    return p[0]
 
 def main(A):
-    """find the normalization factor matching the mean flux,
-       this only use Zred, because redshift distortion is small.
-       """
-  
-    Z = A.P('Zreal', memmap='r')
-  
-    rawflux = A.P('rawflux', memmap='r')
-    zbins = numpy.linspace(Z.min(), Z.max(), 100, endpoint=True)
-    zcenter = 0.5 * (zbins[1:] + zbins[:-1])
-    afactor = numpy.ones_like(zcenter)
-    meanflux_expected = A.FPGAmeanflux(1 / (1 + zcenter))
-  
-    print 'zbins = ', zbins[0], zbins[-1]
+    """matched mean flux for dreal"""
 
-    dig = numpy.digitize(Z, zbins)
-    ind = dig.argsort()
-    dig = dig[ind]
-  
-    with sharedmem.Pool() as pool:
-        for i in range(len(zcenter)):
-            left = dig.searchsorted(i + 1, side='left')
-            right = dig.searchsorted(i + 1, side='right')
-            subset = ind[left:right]
-            if subset.size == 0:
-                afactor[i] = 1.0
-                continue
-
-            subset.sort()
-            F = rawflux[subset]
-            chunksize = 1024 * 24
-            def cost(az):
-                def work(i):
-                    G = F[i:i+chunksize]
-                    return (G[G!=0] ** az[0]).sum(dtype='f8')
-                Fsum = numpy.sum(pool.map(work, range(0, len(F), chunksize)))
-                Fmean = Fsum / F.size
-                dist = (Fmean - meanflux_expected[i])
-                return dist
-            if i > 1:
-              p0 = afactor[i - 1]
-            else:
-              p0 = 1.0
-            p = leastsq(cost, p0, full_output=False)
-            afactor[i] = p[0]
-            print i, zcenter[i], afactor[i], meanflux_expected[i], F.size
-  
-    numpy.savetxt(A.datadir + '/afactor.txt', zip(zcenter, afactor),
-            fmt='%g')
-
-    print 'normalizing'
-    AZ = interp1d(zcenter, afactor, fill_value=1.0, kind=4)
-    chunksize = 1048576
-    fluxfile = A.F('flux', mode='a')
-    for i in range(0, len(rawflux), chunksize):
-        SL = slice(i, i + chunksize)
-        flux = numpy.zeros(rawflux[SL].shape, dtype=pixeldtype['flux'])
-        mask = rawflux[SL] != 0
-        flux[mask] = rawflux[SL][mask] ** AZ(Z[SL])[mask]
-        flux.tofile(fluxfile)
-        fluxfile.flush()
+    delta = A.P('delta')
+    Zreal = A.P('Zreal')
+    tau = A.P('tau', memmap='w+', shape=delta.shape)
+    deltatotau(A, delta, tau, Zreal)
+    tau.flush()

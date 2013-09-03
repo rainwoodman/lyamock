@@ -11,16 +11,20 @@ import chealpy
 pixeldtype = numpy.dtype(
     [   
         ('objectid', 'i4'), 
-        ('pixelid', 'i4'), 
         ('delta', 'f4'), 
         ('dispx', 'f4'), 
         ('dispy', 'f4'), 
         ('dispz', 'f4'), 
-        ('xyzlya', ('f4', 3)), 
-        ('flux', 'f4'), 
-        ('rawflux', 'f4'), 
         ('Zreal', 'f4'),
-        ('Zred', 'f4'),
+        ('tau', 'f4'),
+
+        ('Zdebug', 'f4'),
+        ('dlinreal', 'f4'),
+        ('dlinred', 'f4'),
+        ('dreal', 'f4'),
+        ('dred', 'f4'),
+        ('freal', 'f4'), 
+        ('fred', 'f4'), 
     ])
 
 bitmapdtype = numpy.dtype([
@@ -31,8 +35,6 @@ bitmapdtype = numpy.dtype([
     ('deltared', 'f4'), 
     ('flux', 'f4'), 
     ('fluxred', 'f4'), 
-    ('wred', 'f4'), 
-    ('wreal', 'f4'), 
     ('pos', ('f4', 3)), 
     ])
 
@@ -51,6 +53,7 @@ class Config(argparse.Namespace):
     parser.add_argument("command", choices=[
        'sightlines',
        'gaussian',
+       'redshift',
        'lognormal', 
        'matchmeanflux',
        'makespectra',
@@ -59,6 +62,7 @@ class Config(argparse.Namespace):
        'qsocorr',
        'pixelcorr',
        'pixelcorr2d',
+       'testdist',
        ])
     parser.add_argument("--usepass1",
                help="use only density input in fifthpass, \
@@ -130,9 +134,17 @@ class Config(argparse.Namespace):
         Npixel = config.getint("IC", "Npixel")
         Geometry = config.get("IC", "Geometry")
         Zmin = config.getfloat("IC", "Zmin")
-        Zmax = config.getfloat("IC", "Zmax")
-        BoxSize = cosmology.Dc(1 / (1 + Zmax)) * DH * 2
-        Observer = numpy.array([BoxSize * 0.5] * 3, dtype='f8')
+        if Geometry == 'Test':
+            BoxSize = config.getfloat("IC", "BoxSize")
+            Observer = None
+            Zmax = 1 / cosmology.Dc.inv(
+                      BoxSize / DH  \
+                    + cosmology.Dc(1 / (1 + Zmin))) - 1
+        else:
+            Zmax = config.getfloat("IC", "Zmax")
+            BoxSize = cosmology.Dc(1 / (1 + Zmax)) * DH * 2
+            Observer = numpy.array([BoxSize * 0.5] * 3, dtype='f8')
+
         KSplit = 0.5 * 2 * numpy.pi / BoxSize * NmeshCoarse * 1.0
 
         assert Geometry in ['Sphere', 'Test']
@@ -366,9 +378,13 @@ class Config(argparse.Namespace):
         internalsightlinedtype = [('x1', ('f8', 3)),
                        ('x2', ('f8', 3)),
                        ('dir', ('f8', 3)),
+                       ('Nrawpixel', 'i8'),
+                       ('Start', 'i8'),
                        ('Z', 'f8'),
                        ('Zmax', 'f8'),
                        ('Zmin', 'f8'),
+                       ('Rmax', 'f8'),
+                       ('Rmin', 'f8'),
                        ('RA', 'f8'),
                        ('DEC', 'f8'),
                        ('refMJD', 'i4'),
@@ -416,22 +432,20 @@ class Config(argparse.Namespace):
             sightlines.x1[:, 1] = numpy.sin(raw.RA) * numpy.cos(raw.DEC)
             sightlines.x1[:, 2] = numpy.sin(raw.DEC)
             sightlines.x2[...] = sightlines.x1
-            Dcmin = self.cosmology.Dc(1 / (sightlines.Zmin + 1))[:, None]
-            Dcmax = self.cosmology.Dc(1 / (sightlines.Zmax + 1))[:, None]
-
-            sightlines.x1 *= Dcmin
-            sightlines.x2 *= Dcmax
-            sightlines.x1 *= self.DH
-            sightlines.x2 *= self.DH
-             
+            sightlines.Rmin = self.cosmology.Dc(1 / (sightlines.Zmin + 1)) * self.DH
+            sightlines.Rmax = self.cosmology.Dc(1 / (sightlines.Zmax + 1)) * self.DH 
+            sightlines.x1 *= sightlines.Rmin[:, None]
+            sightlines.x2 *= sightlines.Rmax[:, None]
+            sightlines.Nrawpixel = (sightlines.Rmax - sightlines.Rmin) / self.JeansScale
             sightlines.x1 += self.BoxSize * 0.5
             sightlines.x2 += self.BoxSize * 0.5
         elif self.Geometry == 'Test':
             sightlines = numpy.empty(self.Npixel ** 2, 
-                    dtype=sightlinedtype).view(numpy.recarray)
+                    dtype=internalsightlinedtype).view(numpy.recarray)
             Zmin = self.Zmin
-            Dcmin = self.cosmology.Dc(1 / (Zmin + 1))
-            Zmax = 1 / self.cosmology.aback(Dcmin + self.BoxSize / self.DH) - 1
+            Rmin = self.cosmology.Dc(1 / (Zmin + 1)) * self.DH
+            Rmax = Rmin + self.BoxSize
+            Zmax = 1 / self.cosmology.aback(Rmax / self.DH) - 1
             sightlines.Zmax[...] = Zmax
             sightlines.Zmin[...] = Zmin
             x, y = \
@@ -442,11 +456,16 @@ class Config(argparse.Namespace):
             sightlines.x1[:, 2] = 0
             sightlines.x2[...] = sightlines.x1 
             sightlines.x2[:, 2] = self.BoxSize
+            sightlines.Rmin[... ] = Rmin
+            sightlines.Rmax[... ] = Rmax
+            sightlines.Nrawpixel = self.Npixel
 
         sightlines.dir = sightlines.x2 - sightlines.x1
         sightlines.dir *= numpy.einsum('ij, ij->i', sightlines.dir,
                 sightlines.dir)[:, None] ** -0.5
 
+        sightlines.Start[0] = 0
+        sightlines.Start[1:] = sightlines.Nrawpixel.cumsum()[:-1]
         if (sightlines.x1 + 1>= 0).all() and \
            (sightlines.x1 - 1<= self.BoxSize).all() and \
            (sightlines.x2 + 1>= 0).all() and \

@@ -1,7 +1,6 @@
 import numpy
 import density
 from args import pixeldtype, sightlinedtype
-from bresenham import clipline
 from scipy.ndimage import map_coordinates, spline_filter
 from scipy.stats import norm
 from density import lognormal
@@ -11,7 +10,11 @@ import chealpy
 def main(A):
     """ quasars identify quasars"""
     print 'preparing large scale modes'
-  
+
+    global shuffle, gaussian
+    shuffle = density.build_shuffle((A.NmeshQSO, A.NmeshQSO, A.NmeshQSO //2 + 1))
+    gaussian = density.begin_irfftn((A.NmeshQSO, A.NmeshQSO, A.NmeshQSO // 2 + 1),
+            dtype=numpy.complex64)
     var0 = initcoarse(A)
 
     var1 = initqso1(A)
@@ -49,7 +52,6 @@ def main(A):
                         raw.tofile(output)
                         output.flush()
                 N += len(QSOs)
-            print i, j, k, N
             return N
                 
         NQSO = numpy.sum(pool.starmap(work, A.yieldwork()))
@@ -95,9 +97,11 @@ def initqso1(A):
     print 'bootstrap the variance'
     with sharedmem.Pool() as pool:
       def work(seed):
+        density.gaussian(gaussian, shuffle, seed)
         # add in the small scale power
-        delta1, var1 = density.realize(A.power, seed, 
-                  A.NmeshQSO, A.BoxSize / A.Nrep, Kmin=A.KSplit)
+        delta1, var1 = density.realize(A.power, None, 
+                  A.NmeshQSO, A.BoxSize / A.Nrep, Kmin=A.KSplit,
+                  gaussian=gaussian)
         return var1
   
       # just do 16 small boxes to estimate the variance
@@ -119,19 +123,18 @@ class Visitor(object):
     def __init__(self, box):
         A = self.A
         self.box = box
+        density.gaussian(gaussian, shuffle, A.SeedTable[box.i, box.j, box.k])
         delta1, var1 = density.realize(A.power, 
-              A.SeedTable[box.i, box.j, box.k],
-              A.NmeshQSO, A.BoxSize / A.Nrep, Kmin=A.KSplit)
-        self.delta = delta1.reshape(-1)
+              None,
+              A.NmeshQSO, A.BoxSize / A.Nrep, Kmin=A.KSplit,
+              gaussian=gaussian)
+        self.delta = delta1
         self.Rmin = self.Dc(1 / (A.Zmin + 1)) * A.DH
         self.Rmax = self.Dc(1 / (A.Zmax + 1)) * A.DH
         self.rng = numpy.random.RandomState(A.SeedTable[box.i, box.j, box.k]) 
         self.cellsize = A.BoxSize / A.NmeshQSOEff
 
     def getqso(self, chunk):
-        start, end, step = chunk.getslice().indices(self.A.NmeshQSO ** 3)
-        linear = numpy.arange(start, end, step)
-        xyzqso = numpy.array(numpy.unravel_index(linear, (self.A.NmeshQSO,) * 3)).T
         return xyzqso
 
     def getcoarse(self, xyzqso):
@@ -141,12 +144,12 @@ class Visitor(object):
     def getcenter(self, xyzcoarse):
         return xyzcoarse / self.A.NmeshCoarse * self.A.BoxSize - self.A.BoxSize * 0.5
 
-    def selectpixels(self, xyz):
+    def selectpixels(self, xyz, delta):
         R = numpy.einsum('ij,ij->i', xyz, xyz) ** 0.5
         u = self.rng.uniform(len(xyz))
         #apply the redshift and skymask selection
         mask = (R < self.Rmax) & (R > self.Rmin) & (self.skymask(xyz) > 0)
-        delta = self.delta[mask]
+        delta = delta[mask]
         xyz = xyz[mask]
         R = R[mask]
         a = self.Dc.inv(R / self.A.DH)
@@ -178,13 +181,16 @@ class Visitor(object):
 
     def visit(self, chunk):
         sl = chunk.getslice()
-        xyzqso = self.getqso(chunk)
+        start, end, step = chunk.getslice().indices(self.A.NmeshQSO ** 3)
+        linear = numpy.arange(start, end, step)
+        xyzqso = numpy.array(numpy.unravel_index(linear, (self.A.NmeshQSO,) * 3)).T
         xyzcoarse = self.getcoarse(xyzqso)
-        self.delta[sl] += map_coordinates(delta0,
+        delta = self.delta.take(linear) 
+        delta += map_coordinates(delta0,
                 xyzcoarse.T, mode='wrap', order=4,
                 prefilter=False)
 
         xyz = self.getcenter(xyzcoarse)    
-        xyz, R, a, delta = self.selectpixels(xyz)
+        xyz, R, a, delta = self.selectpixels(xyz, delta)
         Nqso = self.getNqso(R, a, delta)
         return self.makeqso(xyz, Nqso)
