@@ -23,49 +23,15 @@ def deltaFmodel(A, flux, Z):
     dF = flux / meanflux - 1
     return dF, numpy.ones(len(Z))
 
-def meanflux(vars, Z):
-    Zbins = numpy.linspace(Z.min(), Z.max(), 200, endpoint=True)
-    dig = numpy.digitize(Z, Zbins)
-    meanf = [
-        numpy.bincount(dig, flux, minlength=len(Zbins+1)) \
-            / numpy.bincount(dig, minlength=len(Zbins +1))
-            for flux in vars
-            ]
-    return Zbins[1:], [ i[1:-1] for i in meanf]
-
 def getdata(A):
     data = numpy.fromfile(A.datadir + '/bitmap.raw',
             dtype=bitmapdtype)
-    #mask = (data['Z'] > 2.0) & (data['Z'] < 2.2)
-    #mask &= (data['lambda'] < 1185)
+    mask = (data['Z'] > 2.0) & (data['Z'] < 2.2)
+    mask &= (data['lambda'] < 1185)
     mask = ~numpy.isnan(data['flux'])
     mask &= ~numpy.isnan(data['fluxreal'])
     mask &= ~numpy.isnan(data['delta'])
     data = data[mask]
-
-    z, meanf = meanflux(
-            (data['delta'], data['flux'], data['fluxreal']),
-            data['Z'])
-    delta, flux, fluxreal = meanf
-
-    numpy.savez('meanflux.npz', z=z, delta=delta, flux=flux, fluxreal=fluxreal)
-    
-    figure = Figure(figsize=(4, 5), dpi=200)
-    ax = figure.add_subplot(311)
-    ax.plot(z, delta, 'o ', label='d')
-    ax.legend()
-    ax = figure.add_subplot(312)
-    ax.plot(z, flux, '. ', label='d')
-    ax.plot(z, A.FPGAmeanflux(1 / (z + 1)), '-', label='model')
-    ax.legend()
-    ax = figure.add_subplot(313)
-    ax.plot(z, fluxreal, '. ', label='d')
-    ax.plot(z, A.FPGAmeanflux(1 / (z + 1)), '-',
-            label='model')
-    ax.legend()
-    canvas = FigureCanvasAgg(figure)
-    figure.savefig('meanflux.svg')
-
     pos = data['pos'].copy()
     data['flux'] = deltaFmodel(A, data['flux'], data['Z'])
     data['fluxreal'] = deltaFmodel(A, data['fluxreal'], data['Z'])
@@ -76,7 +42,6 @@ def getdata(A):
         ]).T.copy()
     print 'flux', data['flux'].mean()
     print 'delta', data['delta'].mean()
-
     return pos[::4], delta[::4]
 
 def main(A):

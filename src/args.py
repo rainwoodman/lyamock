@@ -42,16 +42,19 @@ class Config(argparse.Namespace):
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("paramfile", 
                help="the paramfile")
+
     parser.add_argument("command", choices=[
        'sightlines',
        'gaussian',
-       'matchmeanflux',
        'convolve', 
+       'matchmeanflux',
        'makespectra',
-       'check',
+       # above is the pipiline
        'export',
        'exportross',
+       'check',
        'qsocorr',
+       'measuremeanflux',
        'pixelcorr',
        'pixelcorr2d',
        'testdist',
