@@ -12,6 +12,29 @@ def idiv_trunc(x, y, updown):
     #print 'idve_trun', x, y, updown, 1.0 * x / y, rt
     return rt
 
+def integer_ineq(x, y, gl, eq):
+    """ 
+        find extreme value of 
+        gl == 1, eq==1: 
+           t * y >= x
+        gl == -1 eq==1:
+           t * y <= x
+        gl == 1, eq==0: 
+           t * y > x
+        gl == -1 eq==0:
+           t * y < x
+    """
+    r = x / y
+    # flip the sign
+    newgl = numpy.sign(y) * gl
+    # transform to t ?? x / y
+    rt = numpy.where(newgl, 
+            numpy.ceil(r),
+            numpy.floor(r))
+    rt += numpy.where((eq == 0) & (r == rt),
+            newgl, 0)
+    return rt
+
 def drawline(x1, x2, sep, min=None, max=None, return_full=False):
     """ draw a line from x1 to (at least) x2, with pixel separation
         sep. only preserve points in the box given by >=min and < max.
@@ -21,21 +44,83 @@ def drawline(x1, x2, sep, min=None, max=None, return_full=False):
     x1, x2 = numpy.atleast_2d(x1, x2)
     dir = x2 - x1
     L = ((x2 - x1) ** 2).sum(axis=-1) ** 0.5
+    bad = L == 0
+    L[bad] = 1.0
     dir = dir * ((1.0 * sep) / L[:, None])
+    L[bad] = 0.0
     rt = []
-    for i in range(len(x1)):
-        N = numpy.arange(numpy.ceil(L[i] / sep))[:, None]
-        pt = x1[i] + dir[i] * N
-        if min is not None and max is not None:
-            goodmask = numpy.all(pt >= min, axis=-1)
-            goodmask &= numpy.all(pt < max, axis=-1)
-            pt = pt[goodmask]
-        rt.append(pt)
+
+    tmin, tmax = fliangbaskey(x1, x2, min, max)
+    Nmin = numpy.int32(tmin * L / sep - 1) 
+    Nmin[Nmin < 0] = 0
+    Nmax = numpy.int32(tmax * L / sep + 1)
+    bad = Nmax > L / sep + 1
+    Nmax[bad] = L[bad] / sep + 1
+    Npixels = Nmax - Nmin + 1
+    Npixels[L == 0] = 1
+    Npixels[Npixels < 0] = 0
+
+    cumsum = Npixels.cumsum()
+    offset = numpy.concatenate(([0], cumsum[:-1]))
+
+    N = cumsum[-1]
+    o = numpy.repeat(numpy.arange(len(x1)), Npixels)
+    t = numpy.arange(N) - (offset - Nmin)[o]
+    #print t[0], tmin, tmax, t1, t2, T, Dx
+    #print (min - x1) * T, Dx, (min - x1) * T * 1.0 / Dx
+
+    x = (t[..., None] * dir[o])
+    x += x1[o]
+    if len(x) > 0:
+        goodmask = numpy.all(x >= min, axis=-1)
+        goodmask &= numpy.all(x < max, axis=-1)
+        x = x[goodmask]
+        o = o[goodmask]
+    Npixels[:] = numpy.bincount(o, minlength=len(Npixels))
     if not return_full:
-        return numpy.array([len(r) for r in rt], dtype='intp')
+        return Npixels
     else:
-        return numpy.concatenate(rt), numpy.repeat(
-                numpy.range(len(x1)),[len(r) for r in rt]), None
+        #print 't', t, 'dir', dir[o]
+        return x, o, None
+
+def fliangbaskey(x1, x2, min, max):
+    """
+        do the clipping with liang baskey, returns
+        tmin, tmax
+
+        tmin, tmax are in range(0, 1) (0 at x1, 1 at x2)
+    """
+    x1 = numpy.asarray(x1)
+    x2 = numpy.asarray(x2)
+    Dx = x2 - x1
+    bad = Dx == 0
+    #protect against 0
+    vec = Dx
+    vec[bad] = 1
+    # we want to round towards 0
+    min = numpy.array(min, dtype='f8')
+    max = numpy.array(max, dtype='f8')
+    t1 = (min - x1) / vec
+    t2 = (max - x1) / vec
+    vec[bad] = 0
+    outofbound = ((min - x1)[bad] > 0) | ((max - x1)[bad] <= 0)
+    
+    t1[bad] = numpy.where(outofbound, 100, -100)
+    t2[bad] = numpy.where(outofbound, -100, 100)
+
+    tmin = numpy.where(vec >= 0, t1, t2)
+    tmax = numpy.where(vec >= 0, t2, t1)
+    tmin = tmin.max(axis=-1)
+    tmax = tmax.min(axis=-1)
+
+    tmin[tmin < 0] = 0
+    tmin[tmin > 1] = 1
+    tmax[tmax < 0] = 0
+    tmax[tmax > 1] = 1
+
+    #print t1, t2, tmin, tmax, numpy.sign(Dx) * -1
+    # t range from tmin to tmax, inclusive
+    return tmin, tmax
 
 def liangbaskey(x1, x2, min, max):
     """
@@ -181,6 +266,29 @@ def testclipline():
         assert n == clipline([x2], [x1], (0, 0), (2, 2), return_full=False)
         
 def testdrawline():
-    print drawline([0, 0], [10, 10], 1, [2, 2], [5, 5])
+    print drawline([0, 0], [10, 10], 1, [2, 2], [5, 5], True)
+    print fliangbaskey([[0, 0]], [[10, 10]], [2, 2], [5, 5])
+    tests = {
+        ((0, 0), (0, 0)): 1,
+        ((0, 0), (2, 2)): 3,
+        ((2, 2), (0, 0)): 2,
+        ((1, 1), (2, 2)): 2,
+        ((2, 2), (1, 1)): 2,
+        ((-10, -10), (2, 2)): 2,
+        ((0, -10), (2, 2)): 2,
+        ((0, -1), (2, 2)): 2,
+        ((0, -1), (2, 3)): 2,
+        ((0, 2), (2, 2)): 0,
+        ((2, 2), (0, 2)): 0,
+        ((0, 0), (2, 0)): 2,
+        }
+    for x1, x2 in tests:
+        n = tests[(x1, x2)]
+        print x1, x2, n
+        print drawline([x1], [x2], 1.0, (0, 0), (2, 2), return_full=True)
+        print  drawline([x1], [x2], 1.0, (0, 0), (2, 2),
+                return_full=False)[0]
+        assert n == drawline([x1], [x2], 1.0, (0, 0), (2, 2),
+                return_full=False)[0]
 if __name__ == '__main__':
     testdrawline()

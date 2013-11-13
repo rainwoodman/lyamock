@@ -47,14 +47,15 @@ def main(A):
                         raw = numpy.empty(len(QSOs), dtype=sightlinedtype)
                         raw['RA'] = QSOs.RA * 180 / numpy.pi
                         raw['DEC'] = QSOs.DEC * 180 / numpy.pi
-                        raw['Z_VI'] = QSOs.Z
+                        raw['Z_VI'] = -1.0
+                        raw['Z_REAL'] = QSOs.Z
                         raw['R'] = QSOs.R
                         raw.tofile(output)
                         output.flush()
                 N += len(QSOs)
             return N
                 
-        NQSO = numpy.sum(pool.starmap(work, A.yieldwork()))
+        NQSO = numpy.sum(pool.map(work, A.yieldwork(), star=True))
 
     catelog = A.P('QSOcatelog', memmap='r+', dtype=sightlinedtype)
 
@@ -63,11 +64,10 @@ def main(A):
             catelog['RA'] * (numpy.pi / 180))
 
     print 'sorting', len(catelog), 'quasars and assigning fibers'
-    arg = catelog['Z_VI'].argsort()
+    arg = catelog['Z_REAL'].argsort()
     catelog[:] = catelog[arg]
     assignfiber(A, catelog)
     print 'writing', len(catelog), 'quasars'
-    numpy.savetxt(A.datadir + '/QSOcatelog.txt', catelog, fmt='%g %g %g %g %d %d %d')
 
 def assignfiber(A, catelog):
     ind = A.fibers['Z_VI'].searchsorted(catelog['Z_VI'])

@@ -1,64 +1,87 @@
 import numpy
-from splat import splat
 import sharedmem
 from args import pixeldtype, bitmapdtype
 from cosmology import interp1d
-from scipy.optimize import leastsq
-
-def deltatotau(A, delta, tau, Zreal):
-    afactor = findafactor(A, delta, Zreal)
-    chunksize = 1024 * 1024 * 4
-    def work(i):
-        s = slice(i, i + chunksize)
-        tau[s] =-afactor(Zreal[s])* numpy.exp(delta[s])
-    with sharedmem.Pool() as pool:
-        pool.map(work, range(0, len(Zreal), chunksize))
-
-def findafactor(A, delta, Zreal):
-    Nbins = 15
-
-    Rmin = A.sightlines.Rmin.min()
-    Rmax = A.sightlines.Rmax.max()
-    Rbins = numpy.linspace(Rmin, Rmax, Nbins + 1, endpoint=True)
-    zbins = 1 / A.cosmology.Dc.inv(Rbins / A.DH) - 1
-    afactor = numpy.empty(Nbins)
-    Rcenter = (Rbins[1:] + Rbins[:-1]) * 0.5
-    Zcenter = 1 / A.cosmology.Dc.inv(Rcenter / A.DH) - 1
-    afactor[-1] = 1.0
-    Zreal = Zreal[numpy.random.uniform(size=len(Zreal)) < 0.01]
-    dig = numpy.digitize(Zreal, zbins)
-    for i in range(len(Rbins) - 1):
-        d = delta[dig == i + 1]
-        print Zcenter[i], 'npixels=', len(d)
-        a = A.cosmology.Dc.inv(Rcenter[i] / A.DH)
-        expected = A.FPGAmeanflux(a)
-        afactor[i] = findoneafactor(A, d, expected, afactor[i-1])
-        print Zcenter[i], 'afactor', afactor[i]
-    AZ = interp1d(Rcenter, afactor, fill_value=1.0, kind=4)
-    numpy.savez('afactor.npz', R=Rcenter, a=afactor)
-    return AZ
-
-def findoneafactor(A, delta, expected, hint):
-    if len(delta) == 0:
-        return 1.0
-    def cost(afactor):
-        chunksize = 1024 * 16
-        def work(i):
-            s = slice(i, i + chunksize)
-            rawflux = numpy.exp(-afactor * numpy.exp((1 + delta[s])))
-            rawflux[numpy.isnan(rawflux)] = 0
-            return rawflux.sum(dtype='f8')
-        with sharedmem.MapReduce() as pool:
-            total = numpy.sum(pool.map(work, range(0, len(delta), chunksize)))
-        return total / len(delta) - expected
-    p = leastsq(cost, hint, full_output=False)
-    return p[0]
+from scipy.optimize import brentq
 
 def main(A):
-    """matched mean flux for dreal"""
+    """convolve the tau(mass) field, 
+    add in thermal broadening and redshift distortion """
+    indexbyz = IndexByDc(A)
+    Afactors = numpy.zeros(len(indexbyz), 'f8')
+    if len(indexbyz.ind) * 40 < sharedmem.total_memory():
+        memmap = None
+        print 'using memory'
+    else:
+        print 'using memmap'
+        memmap = 'r'
 
-    delta = A.P('delta')
-    Zreal = A.P('Zreal')
-    tau = A.P('tau', memmap='w+', shape=delta.shape)
-    deltatotau(A, delta, tau, Zreal)
-    tau.flush()
+    dc = indexbyz.dc
+    taureal = A.P('taureal', memmap=memmap)
+    taured = A.P('taured', memmap=memmap)
+    Dc = A.cosmology.Dc
+    with sharedmem.MapReduce(np=0) as pool:
+        def iterate(i):
+            ind = indexbyz[i]
+            center = indexbyz.center[i]
+            a = Dc.inv(center)
+            Left = 0.0
+            Right = 1.0
+            # invariance:
+            # meanflux[Left] > meanflux_model
+            # meanflux[Right] < meanflux_model
+            taured_sel = taured[ind]
+            flux_model = A.FPGAmeanflux(a)
+
+            if len(taured_sel) == 0:
+                afac = nan
+                flux_model = 0
+                flux = 0
+            else:
+                def f(afac):
+                    with sharedmem.MapReduce() as pool:
+                        chunksize = 1048576
+                        def sum(i):
+                            return numpy.exp(-afac * taured_sel[i:i+chunksize]).sum()
+                        fluxsum = numpy.sum(pool.map(sum, range(0, len(taured_sel),
+                            chunksize)))
+                    flux = fluxsum / len(taured_sel)
+                    return (flux - flux_model) / flux_model
+                a = 0
+                b = 0.01
+                s = numpy.sign(f(a))
+                while numpy.sign(f(b)) == s:
+                    b = b * 2
+                afac = brentq(f, a, b)
+                flux = numpy.exp(-afac * taured_sel).mean()
+            return i, afac, flux, flux_model
+        def reduce(i, afac, flux, flux_model):
+            Afactors[i] = afac
+            print i, '/', len(indexbyz), afac, flux, flux_model
+        pool.map(iterate, range(len(indexbyz)), reduce=reduce)
+    Afactors = numpy.array(zip(indexbyz.center, Afactors))
+    Afactors = Afactors[~numpy.isnan(Afactors[:, 1])]
+    numpy.savetxt(A.datadir + '/afactors.txt', Afactors)
+    
+class IndexByDc(object):
+    def __init__(self, A):
+        self.dc = A.P('dc')
+        ind = sharedmem.argsort(self.dc)
+        sorted = self.dc[ind]
+        step = 300000 / A.DH
+        self.bins = numpy.arange(self.dc.min(), 
+                self.dc.max() + step,
+                step)
+
+
+        self.center = 0.5 * (self.bins[1:] + self.bins[:-1])
+        self.start = sharedmem.searchsorted(sorted, self.bins, side='left')
+        self.end = self.start.copy()
+        self.end[:-1] = self.start[1:]
+        self.end[-1] = len(sorted)
+        print self.start, self.end
+        self.ind = ind
+    def __len__(self):
+        return len(self.center)
+    def __getitem__(self, i):
+        return numpy.sort(self.ind[self.start[i]:self.end[i]])
