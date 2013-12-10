@@ -39,15 +39,15 @@ def main(A):
         # do the real
         R = dc[ind] * A.DH
 #        print 'dc, A', dc[ind][0], numpy.interp(dc[ind][0], Afactor[0], Afactor[1])
-        flux = numpy.exp(-taured[ind] * 
+        F = numpy.exp(-taured[ind] * 
                 numpy.interp(dc[ind], Afactor[0], Afactor[1]))
-        fluxreal = numpy.exp(-taureal[ind] * 
+        Freal = numpy.exp(-taureal[ind] * 
                 numpy.interp(dc[ind], Afactor[0], Afactor[1]))
-#        print spectra['Z'].mean(), A.FPGAmeanflux(1 / (spectra['Z'].mean() + 1))
+#        print spectra['Z'].mean(), A.FPGAmeanF(1 / (spectra['Z'].mean() + 1))
         W = splat(R, 1, Rbins)[1:-1]
-        spectra['flux'] = splat(R, flux, Rbins)[1:-1] / W
-        spectra['fluxreal'] = splat(R, fluxreal, Rbins)[1:-1] / W
-#        print flux.mean(), spectra['flux'].mean()
+        spectra['F'] = splat(R, F, Rbins)[1:-1] / W
+        spectra['Freal'] = splat(R, Freal, Rbins)[1:-1] / W
+#        print F.mean(), spectra['F'].mean()
         spectra['delta'] = splat(R, 1 + delta[ind], Rbins)[1:-1] \
                 * (A.JeansScale / A.PixelScale) - 1
         spectra['pos'] = (Rbincenter - A.sightlines.Rmin[i])[:, None] /\
@@ -59,9 +59,9 @@ def main(A):
                     spectra=spectra, R=Rbincenter)
 
         # these points have no samples and we fake them by directly using the
-        # mean flux.
+        # mean F.
         # lack = W[1:-1] == 0
-        # bitmap['F'][i][lack] = A.FPGAmeanflux(1 / (1 + bitmap['Z'][i][lack]))
+        # bitmap['F'][i][lack] = A.FPGAmeanF(1 / (1 + bitmap['Z'][i][lack]))
         # no we actually leave them NaN
         return spectra
     chunksize = 1024

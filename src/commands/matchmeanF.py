@@ -28,36 +28,36 @@ def main(A):
             Left = 0.0
             Right = 1.0
             # invariance:
-            # meanflux[Left] > meanflux_model
-            # meanflux[Right] < meanflux_model
+            # meanF[Left] > meanF_model
+            # meanF[Right] < meanF_model
             taured_sel = taured[ind]
-            flux_model = A.FPGAmeanflux(a)
+            F_model = A.FPGAmeanF(a)
 
             if len(taured_sel) == 0:
-                afac = nan
-                flux_model = 0
-                flux = 0
+                afac = numpy.nan
+                F_model = 0
+                F = 0
             else:
                 def f(afac):
                     with sharedmem.MapReduce() as pool:
                         chunksize = 1048576
                         def sum(i):
                             return numpy.exp(-afac * taured_sel[i:i+chunksize]).sum()
-                        fluxsum = numpy.sum(pool.map(sum, range(0, len(taured_sel),
+                        Fsum = numpy.sum(pool.map(sum, range(0, len(taured_sel),
                             chunksize)))
-                    flux = fluxsum / len(taured_sel)
-                    return (flux - flux_model) / flux_model
+                    F = Fsum / len(taured_sel)
+                    return (F - F_model) / F_model
                 a = 0
                 b = 0.01
                 s = numpy.sign(f(a))
                 while numpy.sign(f(b)) == s:
                     b = b * 2
                 afac = brentq(f, a, b)
-                flux = numpy.exp(-afac * taured_sel).mean()
-            return i, afac, flux, flux_model
-        def reduce(i, afac, flux, flux_model):
+                F = numpy.exp(-afac * taured_sel).mean()
+            return i, afac, F, F_model
+        def reduce(i, afac, F, F_model):
             Afactors[i] = afac
-            print i, '/', len(indexbyz), afac, flux, flux_model
+            print i, '/', len(indexbyz), afac, F, F_model
         pool.map(iterate, range(len(indexbyz)), reduce=reduce)
     Afactors = numpy.array(zip(indexbyz.center, Afactors))
     Afactors = Afactors[~numpy.isnan(Afactors[:, 1])]

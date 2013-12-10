@@ -24,8 +24,8 @@ bitmapdtype = numpy.dtype([
     ('lambda', 'f4'), 
     ('Z', 'f4'), 
     ('delta', 'f4'), 
-    ('flux', 'f4'), 
-    ('fluxreal', 'f4'), 
+    ('F', 'f4'), 
+    ('Freal', 'f4'), 
     ('pos', ('f4', 3)), 
     ])
 
@@ -47,16 +47,21 @@ class Config(argparse.Namespace):
        'sightlines',
        'gaussian',
        'convolve', 
-       'matchmeanflux',
+       'matchmeanF',
        'makespectra',
        # above is the pipiline
+       'measuremeanF',
        'export',
        'exportross',
        'check',
+       # below are (cross)correlation
        'qsocorr',
-       'measuremeanflux',
+       'qsocorr2d',
        'pixelcorr',
        'pixelcorr2d',
+       'crosscorr2d',
+       'corrbootstrap',
+       'fit', # will just use the cosmology need to move this thing out
        'testdist',
        ])
     parser.add_argument("--usepass1",
@@ -76,7 +81,7 @@ class Config(argparse.Namespace):
         for name in names:
             setattr(self, name, dict[name])
 
-    def FPGAmeanflux(self, a):
+    def FPGAmeanF(self, a):
         return numpy.exp(-10**(self.FitB + self.FitA * numpy.log10(a)))
 
     def F(self, field, mode='r'):
@@ -154,7 +159,7 @@ class Config(argparse.Namespace):
 
         self.export(locals(), [
             'Seed', 'RNG', 'SeedTable', 'BoxSize', 'Zmin', 'Zmax', 'NmeshFine',
-            'NmeshCoarse', 'KSplit',
+            'NmeshCoarse', 'KSplit', 'BoxPadding',
             'NmeshEff', 'NLyaBox', 'Nrep', 'Geometry', 'Observer'])
 
         print 'BoxSize is', BoxSize
@@ -425,9 +430,9 @@ class Config(argparse.Namespace):
             sightlines.x2[...] = sightlines.x1
             # a bit of padding for RSD
             sightlines.Rmin = self.cosmology.Dc(1 / (Zmin + 1))\
-                    * self.DH - BoxPadding
+                    * self.DH - self.BoxPadding
             sightlines.Rmax = self.cosmology.Dc(1 / (Zmax + 1)) \
-                    * self.DH + BoxPadding
+                    * self.DH + self.BoxPadding
             sightlines.x1 *= sightlines.Rmin[:, None]
             sightlines.x2 *= sightlines.Rmax[:, None]
             sightlines.x1 += self.BoxSize * 0.5

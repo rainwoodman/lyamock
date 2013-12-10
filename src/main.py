@@ -10,7 +10,7 @@
 #                 (less expensive, with as many cores as possible)
 #      gaussian  (expensive, with as many cores as possible)
 #      lognormal (cheap, with as few cores as possible)
-#      matchmeanflux (cheap, don't run with too many cores)
+#      matchmeanF (cheap, don't run with too many cores)
 #      makespectra (cheap, don't run with too many cores)
 #
 #  typical mock takes 2 hour on 16 core good machines, 

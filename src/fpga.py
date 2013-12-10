@@ -3,7 +3,7 @@ def fpga(cosmology, delta, a, Dv=0, uv=0, A0=lambda a: 1.0):
      is a good starting value.
      Dv = d v_r / (H0 d r) is the velocity gradiant along los
       in unit of H0.
-     A0(a) is the normalization to align the mean flux to
+     A0(a) is the normalization to align the mean F to
      Faucher-Giguere fit of the observation.
      Generaly one shall run fpga once to obtain 
   """

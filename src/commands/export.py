@@ -25,7 +25,7 @@ def tofits(A, i, bitmap, left, right):
 
     spectra = bitmap[left[i]:right[i]]
     assert (spectra['objectid'] == i).all()
-    mask = ~numpy.isnan(spectra['flux'])
+    mask = ~numpy.isnan(spectra['F'])
     spectra = spectra[mask]
 
     if len(spectra) == 0: return
@@ -47,8 +47,8 @@ def tofits(A, i, bitmap, left, right):
                 ('z', 'f4')
                 ])
 
-    mock['f'] = spectra['flux']
-    mock['freal'] = spectra['fluxreal']
+    mock['f'] = spectra['F']
+    mock['freal'] = spectra['Freal']
     mock['delta'] = spectra['delta']
     mock['lambda'] = spectra['lambda']
     mock['z'] = spectra['Z']
@@ -69,7 +69,7 @@ def tofits(A, i, bitmap, left, right):
 def txt(A):
     bitmap = bitmap.reshape(-1, A.Npixel)
 
-    good = ~numpy.isnan(bitmap['flux']).any(axis=-1)
+    good = ~numpy.isnan(bitmap['F']).any(axis=-1)
     good = bitmap[good]
     verygood = good['lambda'] < 1185
     verygood = good[verygood]
@@ -81,4 +81,4 @@ def txt(A):
     ra = numpy.arctan2(pos[:, 1], pos[:, 0]) / numpy.pi * 180
     z = verygood['Z']
     numpy.savetxt(A.datadir + '/spectra.txt', numpy.array([ra, dec, z,
-        verygood['flux'], verygood['var'], verygood['w']]).T, fmt='%g')
+        verygood['F'], verygood['var'], verygood['w']]).T, fmt='%g')

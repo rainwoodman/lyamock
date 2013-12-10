@@ -4,7 +4,7 @@ from cosmology import interp1d
 from args import pixeldtype2
 
 def main(A):
-  """ normalize to observed mean flux """
+  """ normalize to observed mean F """
   zcenter, afactor = numpy.loadtxt(A.datadir + '/afactor.txt', unpack=True)
   AZ = interp1d(zcenter, afactor, fill_value=1.0, kind=4)
 
