@@ -44,10 +44,13 @@ def splat(t, value, bins):
     """
     if len(t) == 0:
         return numpy.zeros(len(bins) + 1)
-    ind = numpy.argsort(t)
-    t = t[ind]
-    value = value[ind]
-    cum = numpy.concatenate(([0], numpy.cumsum(value)))
+    if not numpy.isscalar(value):
+        ind = numpy.argsort(t)
+        t = t[ind]
+        value = value[ind]
+        cum = numpy.concatenate(([0], numpy.cumsum(value)))
+    else:
+        cum = numpy.arange(len(t) + 1) * value
     newcum = numpy.interp(bins, t, cum[:-1])
     return numpy.concatenate(([newcum[0]], 
                     numpy.diff(newcum),

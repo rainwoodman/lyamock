@@ -12,6 +12,29 @@ spectradtype = numpy.dtype([
     ('taureal', 'f4'), 
     ])
 
+class SpectraOutput(object):
+    def __init__(self, config):
+        self.config = config
+        self.data = numpy.memmap(config.SpectraOutput, mode='r+', dtype=spectradtype)
+        self.sightlines = Sightlines(config)
+        LogLamGrid = config.LogLamGrid
+        self.LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
+        z = 10 ** self.LogLamCenter / 1216.0 - 1
+        a = 1 / (z + 1)
+        self.Dc = config.cosmology.Dc(a) * config.DH
+
+    def __getitem__(self, index):
+        sl = slice(
+            self.sightlines.PixelOffset[index],
+            self.sightlines.PixelOffset[index] + 
+            self.sightlines.Npixels[index])
+        return (
+    self.Dc[self.sightlines.LogLamGridIndMin[index]:\
+        self.sightlines.LogLamGridIndMax[index]],
+                self.data[sl]['taured'], 
+                self.data[sl]['taureal'], 
+                self.data[sl]['delta'])
+
 def main(A):
     """convolve the tau(mass) field, 
     add in thermal broadening and redshift distortion """
@@ -51,8 +74,9 @@ def main(A):
                     sightlines.PixelOffset[i] + sightlines.Npixels[i])
 
             # assert Npixels and LogLamGridInd are consistent!
-            sl3 = slice(sightlines.LogLamGridIndMin[i],
-                        sightlines.LogLamGridIndMax[i])
+            # offset 1 here is to neglect the first pixel 
+            sl3 = slice(1 + sightlines.LogLamGridIndMin[i],
+                        1 + sightlines.LogLamGridIndMax[i])
 
             delta = deltafield[sl1]
             losdisp = velfield[sl1]

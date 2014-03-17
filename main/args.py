@@ -116,7 +116,7 @@ class Config(object):
         Beta = config.getfloat("FGPA", "Beta")
         LogNormalScale = config.getfloat("FGPA", "LogNormalScale")
         Lambda0 = config.getfloat("FGPA", "Lambda0")
-        # a pixel will be grid - .5e-4 to grid + .5e-4
+        # a pixel will be grid to grid. (grids are the edges)
         LogLamGrid = numpy.log10(Lambda0) + numpy.arange(3000) * 1e-4
         FitA = config.getfloat("FGPA", "FitA")
         FitB = config.getfloat("FGPA", "FitB")
