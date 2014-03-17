@@ -7,9 +7,13 @@ from scipy.ndimage import map_coordinates, spline_filter
 from lib.lazy import Lazy
 from lib import density
 
+# this code makes the sightlines
+# also provides Sightlines(config) that returns
+# the sightline catalogue
+
 sightlinedtype=numpy.dtype([('RA', 'f8'), 
                              ('DEC', 'f8'), 
-                             ('Z_VI', 'f8'),
+                             ('Z_RED', 'f8'),
                              ('Z_REAL', 'f8'),
                              ])
 
@@ -22,6 +26,10 @@ class Sightlines(object):
         self.RA = self.data['RA']
         self.config = config
 
+        # Z_RED is writable!
+        data2 = numpy.memmap(config.QSOCatelog, dtype=sightlinedtype, mode='r+')
+        self.Z_RED = data2['Z_RED']
+
     def __len__(self):
         return len(self.data)
 
@@ -31,6 +39,12 @@ class Sightlines(object):
         rt[0] = 0
         rt[1:] = numpy.cumsum(self.Nsamples)[:-1]
         return rt
+
+    @Lazy
+    def R1(self):
+        cosmology = self.config.cosmology
+        R1 = cosmology.Dc(1 / (self.Zmin + 1))
+        return R1
 
     @Lazy
     def Nsamples(self):
@@ -83,6 +97,15 @@ class Sightlines(object):
         # probably no need to care if it goes out of limit. 
         # really should have used 1e-4 binning than the search but
         # need to deal with the clipping later on.
+        return rt
+    @Lazy
+    def Npixels(self):
+        return self.LogLamGridIndMax - self.LogLamGridIndMin
+    @Lazy
+    def PixelOffset(self):
+        rt = numpy.empty(len(self), dtype='intp')
+        rt[0] = 0
+        rt[1:] = numpy.cumsum(self.Npixels)[:-1]
         return rt
 
 def main(A):

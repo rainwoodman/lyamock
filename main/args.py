@@ -58,23 +58,6 @@ class Config(object):
     def FPGAmeanF(self, a):
         return numpy.exp(-10**(self.FitB + self.FitA * numpy.log10(a)))
 
-    def F(self, field, mode='r'):
-        return file(self.datadir + '/%s.raw' % field, mode=mode)
-
-    def P(self, field, memmap=None, shape=None, dtype=None):
-        if dtype is None:
-            dtype = pixeldtype[field]
-        if memmap is None:
-            rt = numpy.fromfile(self.datadir + '/%s.raw' % field,
-                dtype=dtype)
-            if shape is not None:
-                return rt.reshape(shape)
-            else:
-                return rt
-        else:
-            return numpy.memmap(self.datadir + '/%s.raw' % field,
-                dtype=dtype, mode=memmap, shape=shape)
-
     def __init__(self, paramfile):
         str = file(paramfile).read().replace(';', ',').replace('#', ';')
         config = ConfigParser.ConfigParser()
@@ -130,7 +113,7 @@ class Config(object):
         print 'KSplit is', KSplit, 'in realspace', 2 * numpy.pi / KSplit
 
         QSOScale = config.getfloat("FGPA", "QSOscale")
-        beta = config.getfloat("FGPA", "beta")
+        Beta = config.getfloat("FGPA", "Beta")
         LogNormalScale = config.getfloat("FGPA", "LogNormalScale")
         Lambda0 = config.getfloat("FGPA", "Lambda0")
         # a pixel will be grid - .5e-4 to grid + .5e-4
@@ -148,7 +131,7 @@ class Config(object):
         print 'NmeshQSO is', NmeshQSO, 'grid', BoxSize / NmeshQSOEff
 
         self.export(locals(), [
-            'beta', 'LogNormalScale', 'FitA', 'FitB',
+            'Beta', 'LogNormalScale', 'FitA', 'FitB',
             'NmeshLyaBox', 'QSOScale', 'NmeshQSO', 'NmeshQSOEff', 
             'IGMTemperature', 'LogLamGrid'] )
 
@@ -179,6 +162,12 @@ class Config(object):
         self.export(locals(), ['datadir', 'QSOCatelog', 'PowerSpectrum', 
                 'DeltaField', 'ObjectIDField', 'VelField'])
 
+        try:
+            SpectraOutput = config.get("Cosmology", "SpectraOutput")
+        except ConfigParser.NoOptionError:
+            SpectraOutput = datadir + '/spectra.raw'
+
+        self.export(locals(), ['SpectraOutput'])
     @Lazy
     def QSObias(self):
         """ returns a function evaluating QSO bias
