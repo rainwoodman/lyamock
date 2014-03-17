@@ -76,12 +76,13 @@ def drawline(x1, x2, sep, min=None, max=None, return_full=False):
         goodmask &= numpy.all(x < max, axis=-1)
         x = x[goodmask]
         o = o[goodmask]
+        t = t[goodmask]
     Npixels[:] = numpy.bincount(o, minlength=len(Npixels))
     if not return_full:
         return Npixels
     else:
         #print 't', t, 'dir', dir[o]
-        return x, o, None
+        return x, o, t
 
 def fliangbaskey(x1, x2, min, max):
     """

@@ -1,0 +1,31 @@
+[IO]
+datadir=datadir/
+fibers=DR10Q_alpha_short_v3.dat
+
+[IC]
+Zmin = 2.0
+Zmax = 3.0
+NmeshCoarse = 32
+NmeshEff = 1024
+NRep = 4
+Seed = 100
+
+[Cosmology]
+PowerSpectrum = power.txt
+Sigma8 = 0.8
+OmegaM = 0.26
+OmegaL = 0.74
+OmegaB = 0.044
+h = 0.72
+
+[QSO]
+skymaskfile = boss_survey.hpw
+
+[FGPA]
+LogNormalScale = 500
+Lambda0 = 3069.0
+QSOScale = 40000
+IGMTemperature = 1e4
+beta = 1.58
+FitA = -3.200
+FitB = -2.289

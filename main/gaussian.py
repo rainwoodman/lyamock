@@ -1,16 +1,28 @@
 import numpy
-from bresenham import drawline
+from args import Config
+from args import PowerSpectrum
+from lib.bresenham import drawline
 import sharedmem
-import density
+from lib import density
 from scipy.ndimage import spline_filter, map_coordinates
+
+from smallscale import initlya
+from sightlines import Sightlines
 
 def main(A):
     global gaussian, shuffle, varlya, var1
     # gaussian are used for each subbox.
     # slaves are processes so they won't damage these variables
     # from the master.
-    A.power
+    global powerspec
+    global sightlines
+    global samples
+    global deltafield
+    global objectidfield
+    global velfield
 
+    sightlines = Sightlines(A)
+    powerspec = PowerSpectrum(A)
     gaussian = density.begin_irfftn((A.NmeshFine, A.NmeshFine, A.NmeshFine // 2 + 1),
             dtype=numpy.complex64)
 
@@ -21,40 +33,27 @@ def main(A):
     var0 = initcoarse(A)
     varlya = initlya(A)
     
-    layout = A.layout(len(A.sightlines), chunksize=1024)
+    layout = A.layout(len(sightlines), chunksize=1024)
 
-    layout.Npixels = sharedmem.empty((A.Nrep,) * 3,
-            dtype=('intp', (layout.Nchunks, )))
+    Nsamples = sightlines.Nsamples.sum()
+    print 'total number of pixels', Nsamples
 
-    Estimator.prepare(A)
-    with sharedmem.MapReduce() as pool:
-        def work(i, j, k):
-            box = layout[i, j, k]
-            proc = Estimator(box)
-            for chunk in box:
-                proc.visit(chunk)
-        pool.map(work, A.yieldwork(), star=True)
-
-    layout.PixelEnd = layout.Npixels.cumsum().reshape(layout.Npixels.shape)
-    layout.PixelStart = layout.PixelEnd.copy()
-    layout.PixelStart[0] = 0
-    layout.PixelStart.flat[1:] = layout.PixelEnd.flat[:-1]
+    deltafield = numpy.memmap(A.DeltaField, mode='w+', 
+                dtype='f4', shape=Nsamples)
+    velfield = numpy.memmap(A.VelField, mode='w+', 
+                dtype='f4', shape=Nsamples)
+    objectidfield = numpy.memmap(A.ObjectIDField, mode='w+', 
+                dtype='i4', shape=Nsamples)
 
     processors = [ 
-            GeneratePixels,
             AddDelta,
-            AddDisp(2),
-        ]
-    if A.Geometry != 'Test':
-        processors += [
             AddDisp(0),
             AddDisp(1),
-            ]
+            AddDisp(2),
+        ]
 
-    print layout.Npixels.sum()
-    M = {}
     for proc in processors:
-        proc.prepare(A, layout.Npixels.sum())
+        proc.prepare(A)
 
     MemoryBytes = numpy.max([proc.MemoryBytes for proc in processors])
 
@@ -67,7 +66,6 @@ def main(A):
     with sharedmem.Pool(np=np) as pool:
         def work(i, j, k):
             box = layout[i, j, k]
-            if box.Npixels.sum() == 0: return
             gaussian_save = numpy.empty_like(gaussian)
             # gaussian field will be reused and it 
             # takes time to generate them
@@ -76,12 +74,17 @@ def main(A):
             var = None
             for cls in processors:
                 proc = cls(box, gaussian_save)
+                N = 0
                 for chunk in box:
-                    proc.visit(chunk)
+                    N += proc.visit(chunk)
                 if hasattr(proc, 'var1'):
                     var = proc.var1
                 # free memory
                 del proc 
+                if N == 0: 
+                    # no pixels
+                    # No need to work on other processors
+                    break
             print 'done', i, j, k
             return var
         def reduce(v1):
@@ -98,7 +101,7 @@ def main(A):
 
 def initcoarse(A):
     global delta0, disp0
-    delta0, var0 = density.realize(A.power, 
+    delta0, var0 = density.realize(powerspec, 
                    A.Seed, 
                    A.NmeshCoarse, 
                    A.BoxSize,
@@ -108,7 +111,7 @@ def initcoarse(A):
     disp0 = numpy.empty((3, A.NmeshCoarse, 
         A.NmeshCoarse, A.NmeshCoarse), dtype='f4')
     for d in range(3):
-        disp0[d], junk = density.realize(A.power, 
+        disp0[d], junk = density.realize(powerspec, 
                  A.Seed, A.NmeshCoarse,
                  A.BoxSize, disp=d,
                  Kmax=A.KSplit)
@@ -117,124 +120,80 @@ def initcoarse(A):
     print 'coarse field var', var0
     return var0
 
-def initlya(A):
-    print 'preparing LyaBoxes'
-  
-    # fill the lya resolution small boxes
-    deltalya = sharedmem.empty((A.NLyaBox, 
-        A.NmeshLyaBox, A.NmeshLyaBox, A.NmeshLyaBox))
-  
-    deltalya[:] = 0
-    if A.NmeshLyaBox > 1:
-        # this is the kernel to correct for log normal transformation
-        # as it matters when we get to near the JeansScale
-        def kernel(kx, ky, kz, k):
-            f2 = 1 / (1 + (A.JeansScale / (2 * numpy.pi) * k) ** 2)
-            return f2
-  
-        cutoff = 0.5 * 2 * numpy.pi / A.BoxSize * A.NmeshEff
-        seed = A.RNG.randint(1<<21 - 1, size=A.NLyaBox)
-        def work(i):
-            deltalya[i], varjunk = density.realize(A.power, 
-                    seed[i],
-                    A.NmeshLyaBox, 
-                    A.BoxSize / A.NmeshEff, 
-                    Kmin=cutoff,
-                    kernel=kernel)
-        with sharedmem.Pool() as pool:
-            pool.map(work, range(A.NLyaBox))
-
-    print 'lya field', 'mean', deltalya.mean(), 'var', deltalya.var()
-    return deltalya.var()
-
 class Visitor(object):
     M = {}
     @staticmethod
-    def prepare(cls, A, Npixels, fields):
+    def prepare(cls, A):
         """ prepare is called before the fork """
         cls.A = A
-        for f in fields:
-            if f not in Visitor.M: 
-                Visitor.M[f] = A.P(f, memmap='w+', shape=Npixels)
 
     def __init__(self, box):
         """ init is called after the fork """
         self.box = box
-        A = self.A
 
     def visit(self, chunk):
         pass
 
     def getcoarse(self, xyz):
-        return xyz * (1.0 * self.A.NmeshCoarse / self.A.BoxSize)
+        return (xyz + self.A.BoxSize * 0.5) * (1.0 * self.A.NmeshCoarse / self.A.BoxSize)
     def getfine(self, xyz):
         return (xyz - self.box.origin[None, :]) * \
                 (1.0 * self.A.NmeshFine / (self.A.BoxSize / self.A.Nrep))
 
-    def getpixels(self, chunk, return_full):
+    def getpixels(self, chunk):
         """ return_full is True, return xyzlya, objectid 
             False, return total number of pixels in chunk """
         s = chunk.getslice()
         result = \
             drawline(
-                self.A.sightlines.x1[s], self.A.sightlines.x2[s], 
-                self.A.JeansScale,
+                sightlines.x1[s], sightlines.x2[s], 
+                self.A.LogNormalScale,
                 self.box.origin, 
                 self.box.origin + self.A.BoxSize / self.A.Nrep,
-                return_full=return_full)
-        if return_full:
-            xyz, objectid, junk = result
-            objectid += chunk.offset
-            return xyz, objectid
-        else:
-            return result.sum()
-
-class GeneratePixels(Visitor):
-    @classmethod
-    def prepare(cls, A, Npixels):
-        Visitor.prepare(cls, A, Npixels, [
-            'objectid', 
-            'dc']
-            )
-        cls.MemoryBytes = 1
-
-    def __init__(self, box, gaussian_save):
-        Visitor.__init__(self, box)
-    def visit(self, chunk):
-        ps = slice(chunk.PixelStart, chunk.PixelEnd)
-        xyz, objectid = self.getpixels(chunk, return_full=True)
-        self.M['objectid'][ps] = objectid
-        self.M['dc'][ps] = self.A.xyz2dc(xyz)
+                return_full=True)
+        xyz, objectid, t = result
+        if len(xyz) != 0:
+            Nsamples = sightlines.Nsamples[s]
+            mask = (t < Nsamples[objectid]) & (t >= 0)
+            xyz = xyz[mask]
+            objectid = objectid[mask] + chunk.offset
+            t = t[mask] + sightlines.SampleOffset[objectid]
+        return xyz, objectid, t
 
 class AddDelta(Visitor):
     @classmethod
-    def prepare(cls, A, Npixels):
-        Visitor.prepare(cls, A, Npixels, [
-            'delta']
-            )
+    def prepare(cls, A):
+        Visitor.prepare(cls, A)
         cls.MemoryBytes = A.NmeshFine ** 3 * 8 * 2
 
     def __init__(self, box, gaussian_save):
         Visitor.__init__(self, box)
         A = self.A
         gaussian[...] = gaussian_save
-        delta1, junk = \
-            density.realize(A.power, 
-               None, 
-               A.NmeshFine, 
-               A.BoxSize / A.Nrep, 
-               Kmin=A.KSplit,
-               gaussian=gaussian)
-        self.var1 = delta1.var()
-        self.delta1 = spline_filter(delta1, order=4, 
-                output=numpy.dtype('f4'))
+        if True:
+            delta1, junk = \
+                density.realize(powerspec, 
+                   None, 
+                   A.NmeshFine, 
+                   A.BoxSize / A.Nrep, 
+                   Kmin=A.KSplit,
+                   gaussian=gaussian)
+            self.var1 = delta1.var()
+            self.delta1 = spline_filter(delta1, order=4, 
+                    output=numpy.dtype('f4'))
+        else:
+            self.delta1 = numpy.empty([A.NmeshFine, ] * 3)
+            self.var1 = 1.0
+
         self.RNG = numpy.random.RandomState(
                A.SeedTable[box.i, box.j, box.k] 
             )
 
     def visit(self, chunk):
-        ps = slice(chunk.PixelStart, chunk.PixelEnd)
-        xyz, objectid = self.getpixels(chunk, return_full=True)
+        xyz, objectid, t = self.getpixels(chunk)
+        if len(xyz) == 0: 
+            return 0
+        chunk.empty = False
         xyzcoarse = self.getcoarse(xyz)
         d = map_coordinates(delta0, xyzcoarse.T, 
                 mode='wrap', order=4, prefilter=False)
@@ -244,32 +203,23 @@ class AddDelta(Visitor):
                 mode='wrap', order=4, prefilter=False)
         N = len(xyzfine)
         d[:] += self.RNG.normal(scale=varlya ** 0.5, size=N)
-        self.M['delta'][ps] = d
-
-
-class Estimator(Visitor):
-    @classmethod
-    def prepare(cls, A):
-        Visitor.prepare(cls, A, 0, [])
-
-    def visit(self, chunk):
-        chunk.Npixels[...] = self.getpixels(chunk, return_full=False)
+        deltafield[t] = d
+        objectidfield[t] = numpy.int32(objectid)
+        return len(xyz)
 
 def AddDisp(d):
   class AddDisp(Visitor):
     @classmethod
-    def prepare(cls, A, Npixels):
-        Visitor.prepare(cls, A, Npixels, [
-            'losdisp']
-            )
+    def prepare(cls, A):
+        Visitor.prepare(cls, A)
         cls.MemoryBytes = A.NmeshFine ** 3 * 8 * 2
     def __init__(self, box, gaussian_save):
         Visitor.__init__(self, box)
         A = self.A
-        self.dir = A.sightlines.dir
+        dir = sightlines.dir
         gaussian[...] = gaussian_save
         self.disp1, junk = \
-            density.realize(A.power,
+            density.realize(powerspec,
                 None, 
                 A.NmeshFine,
                 A.BoxSize / A.Nrep, disp=d, Kmin=A.KSplit,
@@ -278,17 +228,23 @@ def AddDisp(d):
         self.disp1 = spline_filter(self.disp1, 
                 order=4, output=numpy.dtype('f4'))
     def visit(self, chunk):
-        ps = slice(chunk.PixelStart, chunk.PixelEnd)
-        xyz, objectid = self.getpixels(chunk, return_full=True)
+        xyz, objectid, t = self.getpixels(chunk)
+        if len(xyz) == 0: return 0
+
         xyzcoarse = self.getcoarse(xyz)
         xyzfine = self.getfine(xyz)
-        proj = self.dir[objectid, d]
+        proj = sightlines.dir[objectid, d]
         disp = map_coordinates(disp0[d], 
                 xyzcoarse.T,
                 mode='wrap', order=4, prefilter=False)
         disp += map_coordinates(self.disp1, 
                 xyzfine.T,
                 mode='wrap', order=4, prefilter=False)
-        self.M['losdisp'][ps] += disp * proj
+        velfield[t] += disp * proj
+        return len(xyz)
   return AddDisp
 
+if __name__ == '__main__':
+    from sys import argv
+    config = Config(argv[1])
+    main(config)

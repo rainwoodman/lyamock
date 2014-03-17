@@ -1,3 +1,7 @@
+import sys
+import os.path
+sys.path.append(os.path.join(os.path.dirname(__file__), '../'))
+
 import numpy
 import os.path
 import StringIO
@@ -5,19 +9,8 @@ import ConfigParser
 import argparse
 from scipy.interpolate import interp1d
 from scipy.interpolate import UnivariateSpline
-from cosmology import Cosmology, Lazy
-import chealpy
+from lib.cosmology import Cosmology, Lazy
 
-pixeldtype = numpy.dtype(
-    [   
-        ('objectid', 'i4'), 
-        ('delta', 'f4'), 
-        ('losdisp', 'f4'), 
-        ('dc', 'f4'),
-        ('Zred', 'f4'),
-        ('taureal', 'f4'),
-        ('taured', 'f4'),
-    ])
 
 bitmapdtype = numpy.dtype([
     ('objectid', 'i4'),
@@ -29,16 +22,7 @@ bitmapdtype = numpy.dtype([
     ('pos', ('f4', 3)), 
     ])
 
-sightlinedtype=numpy.dtype([('RA', 'f8'), 
-                             ('DEC', 'f8'), 
-                             ('Z_VI', 'f8'),
-                             ('Z_REAL', 'f8'),
-                             ('R', 'f8'),
-                             ('refPLATE', 'i2'),
-                             ('refMJD', 'i4'),
-                             ('refFIBERID', 'i2')])
-
-class Config(argparse.Namespace):
+"""
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("paramfile", 
                help="the paramfile")
@@ -64,19 +48,9 @@ class Config(argparse.Namespace):
        'fit', # will just use the cosmology need to move this thing out
        'testdist',
        ])
-    parser.add_argument("--usepass1",
-               help="use only density input in fifthpass, \
-                     thus the bitmap will be density", 
-               action='store_true', default=False)
-    parser.add_argument("--skipred",
-               help="skip redshift in fifthpass, \
-                     thus the bitmap will be density", 
-               action='store_true', default=False)
-    parser.add_argument("--serial",
-               help="serial", action='store_true', default=False)
-    parser.add_argument("--prefix",
-               help="dir to put the export", default='.')
+"""
 
+class Config(object):
     def export(self, dict, names):
         for name in names:
             setattr(self, name, dict[name])
@@ -101,11 +75,9 @@ class Config(argparse.Namespace):
             return numpy.memmap(self.datadir + '/%s.raw' % field,
                 dtype=dtype, mode=memmap, shape=shape)
 
-    def __init__(self, argv):
-        Config.parser.parse_args(argv, self)
-
+    def __init__(self, paramfile):
+        str = file(paramfile).read().replace(';', ',').replace('#', ';')
         config = ConfigParser.ConfigParser()
-        str = file(self.paramfile).read().replace(';', ',').replace('#', ';')
         config.readfp(StringIO.StringIO(str))
 
         self.config = config
@@ -131,23 +103,11 @@ class Config(argparse.Namespace):
         NmeshCoarse = config.getint("IC", "NmeshCoarse")
         NmeshEff = config.getint("IC", "NmeshEff")
         Nrep = config.getint("IC", "Nrep")
-        NLyaBox = config.getint("IC", "NLyaBox")
-        Geometry = config.get("IC", "Geometry")
         Zmin = config.getfloat("IC", "Zmin")
-        if Geometry == 'Test':
-            BoxSize = config.getfloat("IC", "BoxSize")
-            Observer = None
-            Zmax = 1 / cosmology.Dc.inv(
-                      BoxSize / DH  \
-                    + cosmology.Dc(1 / (1 + Zmin))) - 1
-        else:
-            Zmax = config.getfloat("IC", "Zmax")
-            BoxSize = cosmology.Dc(1 / (1 + Zmax)) * DH * 2 + BoxPadding * 2
-            Observer = numpy.array([BoxSize * 0.5] * 3, dtype='f8')
+        Zmax = config.getfloat("IC", "Zmax")
+        BoxSize = cosmology.Dc(1 / (1 + Zmax)) * DH * 2 + BoxPadding * 2
 
         KSplit = 0.5 * 2 * numpy.pi / BoxSize * NmeshCoarse * 1.0
-
-        assert Geometry in ['Sphere', 'Test']
 
         assert NmeshEff % Nrep == 0
         assert NmeshEff % NmeshCoarse == 0
@@ -160,7 +120,7 @@ class Config(argparse.Namespace):
         self.export(locals(), [
             'Seed', 'RNG', 'SeedTable', 'BoxSize', 'Zmin', 'Zmax', 'NmeshFine',
             'NmeshCoarse', 'KSplit', 'BoxPadding',
-            'NmeshEff', 'NLyaBox', 'Nrep', 'Geometry', 'Observer'])
+            'NmeshEff', 'Nrep'])
 
         print 'BoxSize is', BoxSize
         print 'NmeshFine is', NmeshFine 
@@ -169,17 +129,18 @@ class Config(argparse.Namespace):
         print 'NmeshCoarse is', NmeshCoarse, 'grid', BoxSize / NmeshCoarse
         print 'KSplit is', KSplit, 'in realspace', 2 * numpy.pi / KSplit
 
-        QSOScale = config.getfloat("FPGA", "QSOscale")
-        beta = config.getfloat("FPGA", "beta")
-        JeansScale = config.getfloat("FPGA", "JeansScale")
-        PixelScale = config.getfloat("FPGA", "PixelScale")
-        FitA = config.getfloat("FPGA", "FitA")
-        FitB = config.getfloat("FPGA", "FitB")
-        IGMTemperature = config.getfloat('FPGA', 'IGMTemperature')
+        QSOScale = config.getfloat("FGPA", "QSOscale")
+        beta = config.getfloat("FGPA", "beta")
+        LogNormalScale = config.getfloat("FGPA", "LogNormalScale")
+        Lambda0 = config.getfloat("FGPA", "Lambda0")
+        # a pixel will be grid - .5e-4 to grid + .5e-4
+        LogLamGrid = numpy.log10(Lambda0) + numpy.arange(3000) * 1e-4
+        FitA = config.getfloat("FGPA", "FitA")
+        FitB = config.getfloat("FGPA", "FitB")
+        IGMTemperature = config.getfloat('FGPA', 'IGMTemperature')
 
-        NmeshLyaBox = 2 ** (int(numpy.log2(BoxSize / NmeshEff / JeansScale) + 0.5))
+        NmeshLyaBox = 2 ** (int(numpy.log2(BoxSize / NmeshEff / LogNormalScale) + 0.5))
         NmeshQSO = 2 ** (int(numpy.log2(BoxSize / Nrep / QSOScale) + 0.5))
-        if NmeshLyaBox < 1: NmeshLyaBox = 1
         if NmeshQSO < 1: NmeshQSO = 1
 
         NmeshQSOEff = NmeshQSO * Nrep
@@ -187,13 +148,36 @@ class Config(argparse.Namespace):
         print 'NmeshQSO is', NmeshQSO, 'grid', BoxSize / NmeshQSOEff
 
         self.export(locals(), [
-            'beta', 'JeansScale', 'PixelScale', 'FitA', 'FitB',
+            'beta', 'LogNormalScale', 'FitA', 'FitB',
             'NmeshLyaBox', 'QSOScale', 'NmeshQSO', 'NmeshQSOEff', 
-            'IGMTemperature'] )
+            'IGMTemperature', 'LogLamGrid'] )
 
 
         datadir = config.get("IO", "datadir")
-        self.export(locals(), ['datadir'])
+        try:
+            QSOCatelog = config.get("IO", "QSOCatelog")
+        except ConfigParser.NoOptionError:
+            QSOCatelog = datadir + '/QSOCatelog.raw'
+        try:
+            DeltaField = config.get("IO", "DeltaField")
+        except ConfigParser.NoOptionError:
+            DeltaField = datadir + '/DeltaField.raw'
+        try:
+            ObjectIDField = config.get("IO", "ObjectIDField")
+        except ConfigParser.NoOptionError:
+            ObjectIDField = datadir + '/ObjectIDField.raw'
+        try:
+            VelField = config.get("IO", "VelField")
+        except ConfigParser.NoOptionError:
+            VelField = datadir + '/VelField.raw'
+
+        try:
+            PowerSpectrum = config.get("Cosmology", "PowerSpectrum")
+        except ConfigParser.NoOptionError:
+            PowerSpectrum = datadir + '/power.txt'
+
+        self.export(locals(), ['datadir', 'QSOCatelog', 'PowerSpectrum', 
+                'DeltaField', 'ObjectIDField', 'VelField'])
 
     @Lazy
     def QSObias(self):
@@ -317,6 +301,16 @@ class Config(argparse.Namespace):
     def skymask(self):
         """ sky mask in mango healpix format """
         try:
+            import chealpy
+        except ImportError:
+            print "chealpy is not installed, skymask is disabled"
+            def func(xyz):
+                return numpy.ones(shape=xyz.shape[0])
+            func.Nside = 4
+            func.fraction = 1.0
+            func.mask = numpy.ones(4)
+            return func 
+        try:
             skymask = self.config.get("QSO", "skymaskfile")
             skymask = numpy.loadtxt(skymask, skiprows=1)
         except (ConfigParser.NoOptionError, ConfigParser.NoSectionError):
@@ -341,27 +335,6 @@ class Config(argparse.Namespace):
                 for k in range(self.Nrep):
                     yield i, j, k
     @Lazy
-    def power(self):
-        config = self.config
-        try:
-            power = config.get("Cosmology", "PowerSpectrum")
-        except ConfigParser.NoOptionError:
-            power = self.datadir + '/power.txt'
-        try:
-            k, p = numpy.loadtxt(power, unpack=True)
-            print 'using power from file ', power
-        except IOError:
-            print 'using power from pycamb, saving to ', power
-            Pk = self.cosmology.Pk
-            k = Pk.x / self.DH
-            p = Pk.y * self.DH ** 3 * (2 * numpy.pi) ** -3
-            numpy.savetxt(power, zip(k, p))
-
-        p[numpy.isnan(p)] = 0
-        power = k, p
-        return power
-
-    @Lazy
     def fibers(self):
         fibers = self.config.get("IO", 'fibers')
         array = numpy.loadtxt(fibers, usecols=(1, 2, 3, 4, 5, 6),
@@ -374,140 +347,22 @@ class Config(argparse.Namespace):
                 ('Z_VI', 'f8')])
         fibers = array[array['Z_VI'].argsort()]
         return fibers
-
-    @Lazy
-    def sightlines(self):
-        config = self.config
-        internalsightlinedtype = [('x1', ('f8', 3)),
-                       ('x2', ('f8', 3)),
-                       ('dir', ('f8', 3)),
-                       ('Zreal', 'f8'),
-                       ('Z', 'f8'),
-                       ('Zmax', 'f8'),
-                       ('Zmin', 'f8'),
-                       ('Rmax', 'f8'),
-                       ('Rmin', 'f8'),
-                       ('RA', 'f8'),
-                       ('DEC', 'f8'),
-                       ('refMJD', 'i4'),
-                       ('refPLATE', 'i2'),
-                       ('refFIBERID', 'i2'),
-                       ]
-        if self.Geometry == 'Sphere':
-            try:
-                linesfile = config.get("IO", 'sightlines')
-                raw = numpy.loadtxt(linesfile, usecols=(4, 5, 6, 0), 
-                      dtype=[('RA', 'f8'), 
-                             ('DEC', 'f8'), 
-                             ('Z_VI', 'f8'), 
-                             ('THINGID', 'i8'),
-                             ('PLATE', 'i2'),
-                             ('MJD', 'i4'),
-                             ('FIBERID', 'i2'),
-                             ]).view(numpy.recarray)
-            except ConfigParser.NoOptionError:
-                linesfile = self.datadir + '/QSOcatelog.raw'
-                raw = numpy.fromfile(linesfile, dtype=sightlinedtype)\
-                        .view(numpy.recarray)
-            sightlines = numpy.empty(raw.size, 
-                    dtype=internalsightlinedtype).view(numpy.recarray)
-            sightlines.RA = raw.RA
-            sightlines.DEC = raw.DEC
-            sightlines.refPLATE = raw.refPLATE
-            sightlines.refFIBERID = raw.refFIBERID
-            sightlines.refMJD = raw.refMJD
-            sightlines.Z = raw.Z_VI
-            sightlines.Zreal= raw.Z_REAL
-            Zmax = (raw.Z_REAL + 1) * 1216. / 1216 - 1
-            Zmin = (raw.Z_REAL + 1) * 1026. / 1216 - 1
-            Zmin[sightlines.Zmin<0] = 0
-            Zmax[sightlines.Zmax<0] = 0
-            raw.RA *= numpy.pi / 180
-            raw.DEC *= numpy.pi / 180
-            sightlines.x1[:, 0] = numpy.cos(raw.RA) * numpy.cos(raw.DEC)
-            sightlines.x1[:, 1] = numpy.sin(raw.RA) * numpy.cos(raw.DEC)
-            sightlines.x1[:, 2] = numpy.sin(raw.DEC)
-            sightlines.x2[...] = sightlines.x1
-            # a bit of padding for RSD
-            sightlines.Rmin = self.cosmology.Dc(1 / (Zmin + 1))\
-                    * self.DH - self.BoxPadding
-            sightlines.Rmax = self.cosmology.Dc(1 / (Zmax + 1)) \
-                    * self.DH + self.BoxPadding
-            sightlines.x1 *= sightlines.Rmin[:, None]
-            sightlines.x2 *= sightlines.Rmax[:, None]
-            sightlines.x1 += self.BoxSize * 0.5
-            sightlines.x2 += self.BoxSize * 0.5
-        elif self.Geometry == 'Test':
-            Npixel = self.BoxSize / self.PixelScale
-            sightlines = numpy.empty(Npixel ** 2, 
-                    dtype=internalsightlinedtype).view(numpy.recarray)
-            Zmin = self.Zmin
-            Rmin = self.cosmology.Dc(1 / (Zmin + 1)) * self.DH
-            Rmax = Rmin + self.BoxSize
-            Zmax = 1 / self.cosmology.aback(Rmax / self.DH) - 1
-            x, y = \
-                    numpy.indices((Npixel, Npixel)).reshape(2, -1) \
-                    * (self.BoxSize / Npixel)
-            sightlines.x1[:, 0] = x
-            sightlines.x1[:, 1] = y
-            sightlines.x1[:, 2] = 0
-            sightlines.x2[...] = sightlines.x1 
-            sightlines.x2[:, 2] = self.BoxSize
-            sightlines.Rmin[... ] = Rmin
-            sightlines.Rmax[... ] = Rmax
-
-        sightlines.dir = sightlines.x2 - sightlines.x1
-        sightlines.dir *= numpy.einsum('ij, ij->i', sightlines.dir,
-                sightlines.dir)[:, None] ** -0.5
-
-        if (sightlines.x1 + 1>= 0).all() and \
-           (sightlines.x1 - 1<= self.BoxSize).all() and \
-           (sightlines.x2 + 1>= 0).all() and \
-           (sightlines.x2 - 1<= self.BoxSize).all():
-            pass
-        else:
-            print 'some sightlines are not fully in box'
-
-        return sightlines
-
-    def sightlinebins(self, sightline):
-        Zqso = sightline.Zqso
-        bins = numpy.arange(
-            sightline.Rmin[i],
-            sightline.Rmax[i] + self.PixelScale,
-            self.PixelScale)
-        return bins
-
     def xyz2dc(self, xyz):
         """ returns the comoving distance of position xyz,
             xyz is in full box box units. (not any grids),
             return value is in cosmology units (DH)
         """
-        if self.Geometry == 'Test':
-            R = xyz[:, 2].copy()
-            # offset by the redshift
-            R += self.cosmology.Dc(1 / (self.Zmin + 1)) * self.DH
-        elif self.Geometry == 'Sphere':
-            R = ((xyz - self.Observer[None, :]) ** 2).sum(axis=-1) ** 0.5
-        else:
-            raise Exception('Geometry unknown')
+        R = ((xyz) ** 2).sum(axis=-1) ** 0.5
         R /= self.DH
         return R
+
     def layout(self, Ntot, chunksize):
         layout = Layout(Nrep=self.Nrep, Ntot=Ntot, chunksize=chunksize)
         layout.REPoffset = \
                 numpy.array(numpy.indices((self.Nrep,) * 3)).transpose((1, 2, 3, 0))
         layout.origin = \
-               1.0 * layout.REPoffset * self.BoxSize / self.Nrep
-    
-        layout.LYAoffset = \
-                layout.REPoffset * self.NmeshFine * self.NmeshLyaBox
-        layout.LYAsize   = numpy.repeat(self.NmeshFine * self.NmeshLyaBox, \
-                self.Nrep ** 3).reshape((self.Nrep, ) * 3)
+               1.0 * layout.REPoffset * self.BoxSize / self.Nrep - self.BoxSize * 0.5
         return layout
-
-def parseargs(argv=None):
-  return Config(argv)
 
 class Chunk(object):
     def __init__(self, box, i):
@@ -551,4 +406,109 @@ class Layout(object):
             for j in range(self.Nrep):
                 for k in range(self.Nrep):
                     yield self[i, j, k]
+def PowerSpectrum(A):
+    power = A.PowerSpectrum
+    try:
+        k, p = numpy.loadtxt(power, unpack=True)
+        print 'using power from file ', power
+    except IOError:
+        print 'using power from pycamb, saving to ', power
+        Pk = A.cosmology.Pk
+        k = Pk.x / A.DH
+        p = Pk.y * A.DH ** 3 * (2 * numpy.pi) ** -3
+        numpy.savetxt(power, zip(k, p))
 
+    p[numpy.isnan(p)] = 0
+    power = k, p
+    return power
+
+
+if __name__ == '__main__':
+    from sys import argv
+    config = Config(argv[1])
+
+"""
+    @Lazy
+    def sightlines(self):
+        config = self.config
+        internalsightlinedtype = [('x1', ('f8', 3)),
+                       ('x2', ('f8', 3)),
+                       ('dir', ('f8', 3)),
+                       ('Zreal', 'f8'),
+                       ('Z', 'f8'),
+                       ('Zmax', 'f8'),
+                       ('Zmin', 'f8'),
+                       ('Rmax', 'f8'),
+                       ('Rmin', 'f8'),
+                       ('RA', 'f8'),
+                       ('DEC', 'f8'),
+                       ('refMJD', 'i4'),
+                       ('refPLATE', 'i2'),
+                       ('refFIBERID', 'i2'),
+                       ]
+        try:
+            linesfile = config.get("IO", 'sightlines')
+            raw = numpy.loadtxt(linesfile, usecols=(4, 5, 6, 0), 
+                  dtype=[('RA', 'f8'), 
+                         ('DEC', 'f8'), 
+                         ('Z_VI', 'f8'), 
+                         ('THINGID', 'i8'),
+                         ('PLATE', 'i2'),
+                         ('MJD', 'i4'),
+                         ('FIBERID', 'i2'),
+                         ]).view(numpy.recarray)
+        except ConfigParser.NoOptionError:
+            linesfile = self.datadir + '/QSOcatelog.raw'
+            raw = numpy.fromfile(linesfile, dtype=sightlinedtype)\
+                    .view(numpy.recarray)
+        sightlines = numpy.empty(raw.size, 
+                dtype=internalsightlinedtype).view(numpy.recarray)
+        sightlines.RA = raw.RA
+        sightlines.DEC = raw.DEC
+        sightlines.refPLATE = raw.refPLATE
+        sightlines.refFIBERID = raw.refFIBERID
+        sightlines.refMJD = raw.refMJD
+        sightlines.Z = raw.Z_VI
+        sightlines.Zreal= raw.Z_REAL
+        Zmax = (raw.Z_REAL + 1) * 1216. / 1216 - 1
+        Zmin = (raw.Z_REAL + 1) * 1026. / 1216 - 1
+        Zmin[sightlines.Zmin<0] = 0
+        Zmax[sightlines.Zmax<0] = 0
+        raw.RA *= numpy.pi / 180
+        raw.DEC *= numpy.pi / 180
+        sightlines.x1[:, 0] = numpy.cos(raw.RA) * numpy.cos(raw.DEC)
+        sightlines.x1[:, 1] = numpy.sin(raw.RA) * numpy.cos(raw.DEC)
+        sightlines.x1[:, 2] = numpy.sin(raw.DEC)
+        sightlines.x2[...] = sightlines.x1
+        # a bit of padding for RSD
+        sightlines.Rmin = self.cosmology.Dc(1 / (Zmin + 1))\
+                * self.DH - self.BoxPadding
+        sightlines.Rmax = self.cosmology.Dc(1 / (Zmax + 1)) \
+                * self.DH + self.BoxPadding
+        sightlines.x1 *= sightlines.Rmin[:, None]
+        sightlines.x2 *= sightlines.Rmax[:, None]
+        sightlines.x1 += self.BoxSize * 0.5
+        sightlines.x2 += self.BoxSize * 0.5
+
+        sightlines.dir = sightlines.x2 - sightlines.x1
+        sightlines.dir *= numpy.einsum('ij, ij->i', sightlines.dir,
+                sightlines.dir)[:, None] ** -0.5
+
+        if (sightlines.x1 + 1>= 0).all() and \
+           (sightlines.x1 - 1<= self.BoxSize).all() and \
+           (sightlines.x2 + 1>= 0).all() and \
+           (sightlines.x2 - 1<= self.BoxSize).all():
+            pass
+        else:
+            print 'some sightlines are not fully in box'
+
+        return sightlines
+
+    def sightlinebins(self, sightline):
+        Zqso = sightline.Zqso
+        bins = numpy.arange(
+            sightline.Rmin[i],
+            sightline.Rmax[i] + self.PixelScale,
+            self.PixelScale)
+        return bins
+"""

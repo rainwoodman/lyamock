@@ -2,6 +2,8 @@ import numpy
 from scipy.integrate import romberg
 from scipy.interpolate import InterpolatedUnivariateSpline
 
+# we keep cosmology.py relatively independent. Lazy is copied from
+# lazy.py
 class Lazy(object):
     def __init__(self, calculate_function):
         self._calculate = calculate_function
@@ -41,7 +43,7 @@ class interp1d(InterpolatedUnivariateSpline):
     y = InterpolatedUnivariateSpline.__call__(self, x.ravel(), nu=nu)
     y[bad] = self.fill_value
     return y.reshape(shape)
- 
+
 Np = 1000
 logamin = -20
 class Cosmology(object):
