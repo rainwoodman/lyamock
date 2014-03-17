@@ -1,5 +1,7 @@
 import numpy
-def splat(t, value, bins):
+from scipy.integrate import cumtrapz
+
+def splat0(t, value, bins):
     """put value into bins according to t
        the points are assumed to be describing a continuum field,
        if two points have the same position, they are merged into one point
@@ -30,4 +32,24 @@ def splat(t, value, bins):
     l = numpy.bincount(dig[:-1], value * weightleft, minlength=len(bins)+1)
     r = numpy.bincount(dig[1:], value * weightright, minlength=len(bins)+1)
     return l + r
+
+def splat(t, value, bins):
+    """put value into bins according to t
+       the points are assumed to be describing a continuum field,
+       if two points have the same position, they are merged into one point
+
+       for points crossing the edge part is added to the left bin
+       and part is added to the right bin.
+       the sum is conserved.
+    """
+    if len(t) == 0:
+        return numpy.zeros(len(bins) + 1)
+    ind = numpy.argsort(t)
+    t = t[ind]
+    value = value[ind]
+    cum = numpy.concatenate(([0], numpy.cumsum(value)))
+    newcum = numpy.interp(bins, t, cum[:-1])
+    return numpy.concatenate(([newcum[0]], 
+                    numpy.diff(newcum),
+                    [cum[-1] - newcum[-1]]))
 
