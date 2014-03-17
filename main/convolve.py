@@ -27,23 +27,6 @@ def main(A):
 
     SQRT_KELVIN_TO_KMS = 0.12849 / 2. ** 0.5
 
-    # crossection of lyman alpha in cm**2 = 1.34e-12, 
-    # in code units it is
-    # 
-    RLYAC = 1.34e-12 * 3.08567758e21 ** -2
-
-    # proton mass in coded units
-    PROTON = 1.6733e-27 / (1e10 * 1.9891e30)
-
-    # comoving critical density (3*h_0^2)/(8*pi*g)
-    RHOB_C = A.cosmology.B * 3 * A.H0 ** 2 / (8 * 3.14159 * A.G)
-    nH_C = RHOB_C / PROTON
-    # watch out this is partially comoving (length) 
-    # partially proper (area)
-    TAU_C =  nH_C * RLYAC * A.LogNormalScale
-
-    print 'TAU_C = ', TAU_C
-
     sightlines = Sightlines(A)
     spectra = numpy.memmap(A.SpectraOutput, mode='w+', 
             dtype=spectradtype, 
@@ -95,7 +78,7 @@ def main(A):
 
             # tau is proportional to taureal, modulated by a slow
             # function A(z), see LeGoff or Croft
-            taureal = numpy.float32(deltaLN ** A.Beta) * a ** 2 * TAU_C
+            taureal = numpy.float32(deltaLN ** A.Beta) * A.LogNormalScale
             taured = numpy.float32(irconvolve(dreal, dred, taureal,
                 dtherm))
             assert not numpy.isnan(taured).any()
