@@ -85,7 +85,7 @@ def main(A):
                     # no pixels
                     # No need to work on other processors
                     break
-            print 'done', i, j, k
+            print 'done', i, j, k, N
             return var
         def reduce(v1):
             if v1 is not None:
