@@ -1,87 +1,72 @@
 import numpy
 import sharedmem
-from args import pixeldtype, bitmapdtype
-from cosmology import interp1d
 from scipy.optimize import brentq
+from scipy.integrate import romberg
+
+from args import Config
+from args import MeanFractionModel
+from args import VarFractionModel
+from convolve import SpectraOutput
 
 def main(A):
-    """convolve the tau(mass) field, 
-    add in thermal broadening and redshift distortion """
-    indexbyz = IndexByDc(A)
-    Afactors = numpy.zeros(len(indexbyz), 'f8')
-    if len(indexbyz.ind) * 40 < sharedmem.total_memory():
-        memmap = None
-        print 'using memory'
-    else:
-        print 'using memmap'
-        memmap = 'r'
+    """ match the mean fraction by fixing prefactor A(a) on tau
+        add in thermal broadening and redshift distortion """
+    global spectra
+    global meanfractionmodel
+    global varfractionmodel
+    spectra = SpectraOutput(A)
+    varfractionmodel = VarFractionModel(A)
+    meanfractionmodel = MeanFractionModel(A)
 
-    dc = indexbyz.dc
-    taureal = A.P('taureal', memmap=memmap)
-    taured = A.P('taured', memmap=memmap)
-    Dc = A.cosmology.Dc
-    with sharedmem.MapReduce(np=0) as pool:
-        def iterate(i):
-            ind = indexbyz[i]
-            center = indexbyz.center[i]
-            a = Dc.inv(center)
-            Left = 0.0
-            Right = 1.0
-            # invariance:
-            # meanF[Left] > meanF_model
-            # meanF[Right] < meanF_model
-            taured_sel = taured[ind]
-            F_model = A.FPGAmeanF(a)
-
-            if len(taured_sel) == 0:
-                afac = numpy.nan
-                F_model = 0
-                F = 0
-            else:
-                def f(afac):
-                    with sharedmem.MapReduce() as pool:
-                        chunksize = 1048576
-                        def sum(i):
-                            return numpy.exp(-afac * taured_sel[i:i+chunksize]).sum()
-                        Fsum = numpy.sum(pool.map(sum, range(0, len(taured_sel),
-                            chunksize)))
-                    F = Fsum / len(taured_sel)
-                    return (F - F_model) / F_model
-                a = 0
-                b = 0.01
-                s = numpy.sign(f(a))
-                while numpy.sign(f(b)) == s:
-                    b = b * 2
-                afac = brentq(f, a, b)
-                F = numpy.exp(-afac * taured_sel).mean()
-            return i, afac, F, F_model
-        def reduce(i, afac, F, F_model):
-            Afactors[i] = afac
-            print i, '/', len(indexbyz), afac, F, F_model
-        pool.map(iterate, range(len(indexbyz)), reduce=reduce)
-    Afactors = numpy.array(zip(indexbyz.center, Afactors))
-    Afactors = Afactors[~numpy.isnan(Afactors[:, 1])]
-    numpy.savetxt(A.datadir + '/afactors.txt', Afactors)
+    Nbins = 8
+    zBins = numpy.linspace(2.0, 4.0, Nbins + 1, endpoint=True)
     
-class IndexByDc(object):
-    def __init__(self, A):
-        self.dc = A.P('dc')
-        ind = sharedmem.argsort(self.dc)
-        sorted = self.dc[ind]
-        step = 300000 / A.DH
-        self.bins = numpy.arange(self.dc.min(), 
-                self.dc.max() + step,
-                step)
+    z = 0.5 * (zBins[1:] + zBins[:-1])
+    A = numpy.empty_like(z)
+    for i in range(Nbins):
+        A[i], E, V = fitRange(zBins[i], zBins[i + 1], spectra.taured)
+        print A[i], z[i], E, meanfractionmodel(1 / (1 + z[i])), V, varfractionmodel(1 / (1 + z[i]))
+    print A, z
 
+def fitRange(zMin, zMax, field):
+    # field needs to be spectra.taured or spectra.taureal
 
-        self.center = 0.5 * (self.bins[1:] + self.bins[:-1])
-        self.start = sharedmem.searchsorted(sorted, self.bins, side='left')
-        self.end = self.start.copy()
-        self.end[:-1] = self.start[1:]
-        self.end[-1] = len(sorted)
-        print self.start, self.end
-        self.ind = ind
-    def __len__(self):
-        return len(self.center)
-    def __getitem__(self, i):
-        return numpy.sort(self.ind[self.start[i]:self.end[i]])
+    # now lets pick the pixels
+    LogLamMin = numpy.log10((zMin + 1) * 1216.)
+    LogLamMax = numpy.log10((zMax + 1) * 1216.)
+
+    Npixels = numpy.empty(len(spectra), 'intp')
+
+    for i in range(len(spectra)):
+        LogLam = spectra.LogLam[i]
+        mask = (LogLam >= LogLamMin) & (LogLam <= LogLamMax)
+        Npixels[i] = mask.sum()
+
+    values = numpy.empty(Npixels.sum(), 'f8')
+    PixelOffset = numpy.concatenate([[0], Npixels.cumsum()[:-1]])
+
+    for i in range(len(spectra)):
+        LogLam = spectra.LogLam[i]
+        mask = (LogLam >= LogLamMin) & (LogLam <= LogLamMax)
+        sl = slice(PixelOffset[i], PixelOffset[i] + Npixels[i])
+        values[sl] = field[i][mask]
+
+    # What is the mean of the model?
+    aMin = 1 / (1. + zMin)
+    aMax = 1 / (1. + zMax)
+
+    data = romberg(meanfractionmodel, aMin, aMax) / (aMax - aMin)
+
+    # OK we have collected the tau values now use brentq to 
+    # solve for A.
+    def func(afac):
+        return numpy.exp(-afac * values).mean() / data - 1.0
+    
+    afac = brentq(func, 0, 1e-2)
+    fraction = numpy.exp(-afac * values)
+
+    return afac, fraction.mean(), fraction.var()
+
+if __name__ == '__main__':
+    from sys import argv
+    main(Config(argv[1]))

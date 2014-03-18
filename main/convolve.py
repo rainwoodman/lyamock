@@ -1,39 +1,75 @@
 import numpy
 import sharedmem
+
 from args import Config
 from sightlines import Sightlines
+from lib.lazy import Lazy
 from lib.interp1d import  interp1d
 from lib.irconvolve import irconvolve
 from lib.splat import splat
 
-spectradtype = numpy.dtype([
-    ('delta', 'f4'), 
-    ('taured', 'f4'), 
-    ('taureal', 'f4'), 
-    ])
-
 class SpectraOutput(object):
     def __init__(self, config):
         self.config = config
-        self.data = numpy.memmap(config.SpectraOutput, mode='r+', dtype=spectradtype)
-        self.sightlines = Sightlines(config)
-        LogLamGrid = config.LogLamGrid
-        self.LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
-        z = 10 ** self.LogLamCenter / 1216.0 - 1
-        a = 1 / (z + 1)
-        self.Dc = config.cosmology.Dc(a) * config.DH
+        sightlines = Sightlines(config)
+        class Accessor(object):
+            def __init__(self, data):
+                self.data = data
+            def __getitem__(self, index):
+                sl = slice(
+                    sightlines.PixelOffset[index],
+                    sightlines.PixelOffset[index] + 
+                    sightlines.Npixels[index])
+                return self.data[sl] 
+        self.Accessor = Accessor
+        class Faker(object):
+            def __init__(self, table):
+                self.table = table
+            def __getitem__(self, index):
+                sl = slice(
+                sightlines.LogLamGridIndMin[index],
+                sightlines.LogLamGridIndMax[index])
+                return self.table[sl]
+        self.Faker = Faker
+        self.sightlines = sightlines
+    def __len__(self):
+        return len(self.sightlines)
+    @Lazy
+    def taured(self):
+        taured = numpy.memmap(self.config.SpectraOutputTauRed, mode='r+', dtype='f4')
+        return self.Accessor(taured) 
+        
+    @Lazy
+    def taureal(self):
+        taureal = numpy.memmap(self.config.SpectraOutputTauReal, mode='r+', dtype='f4')
+        return self.Accessor(taureal) 
 
-    def __getitem__(self, index):
-        sl = slice(
-            self.sightlines.PixelOffset[index],
-            self.sightlines.PixelOffset[index] + 
-            self.sightlines.Npixels[index])
-        return (
-    self.Dc[self.sightlines.LogLamGridIndMin[index]:\
-        self.sightlines.LogLamGridIndMax[index]],
-                self.data[sl]['taured'], 
-                self.data[sl]['taureal'], 
-                self.data[sl]['delta'])
+    @Lazy
+    def delta(self):
+        delta = numpy.memmap(self.config.SpectraOutputDelta, mode='r+', dtype='f4')
+        return self.Accessor(delta)
+
+    @Lazy
+    def LogLam(self):
+        LogLamGrid = self.config.LogLamGrid
+        LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
+        return self.Faker(LogLamCenter)
+
+    @Lazy
+    def z(self):
+        LogLamGrid = self.config.LogLamGrid
+        LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
+        z = 10 ** LogLamCenter / 1216.0 - 1
+        return self.Faker(z)
+        
+    @Lazy
+    def Dc(self):
+        LogLamGrid = self.config.LogLamGrid
+        LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
+        z = 10 ** LogLamCenter / 1216.0 - 1
+        a = 1 / (z + 1)
+        Dc = self.config.cosmology.Dc(a) * self.config.DH
+        return self.Faker(Dc)
 
 def main(A):
     """convolve the tau(mass) field, 
@@ -51,9 +87,14 @@ def main(A):
     SQRT_KELVIN_TO_KMS = 0.12849 / 2. ** 0.5
 
     sightlines = Sightlines(A)
-    spectra = numpy.memmap(A.SpectraOutput, mode='w+', 
-            dtype=spectradtype, 
-            shape=sightlines.Npixels.sum())
+    Npixels = sightlines.Npixels.sum()
+
+    spectaureal = numpy.memmap(A.SpectraOutputTauReal, mode='w+', 
+            dtype='f4', shape=Npixels)
+    spectaured = numpy.memmap(A.SpectraOutputTauRed, mode='w+', 
+            dtype='f4', shape=Npixels)
+    specdelta = numpy.memmap(A.SpectraOutputDelta, mode='w+', 
+            dtype='f4', shape=Npixels)
 
     var = numpy.loadtxt(A.datadir + '/gaussian-variance.txt')
     print var
@@ -80,7 +121,6 @@ def main(A):
 
             delta = deltafield[sl1]
             losdisp = velfield[sl1]
-            thisspectra = spectra[sl2]
 
             # dreal is in Hubble distance units
             dreal = sightlines.R1[i] + \
@@ -113,9 +153,9 @@ def main(A):
             taured_pix = splat(loglam, taured, A.LogLamGrid)
             delta_pix = splat(loglam, 1 + delta, A.LogLamGrid) / splat(loglam, 1.0, A.LogLamGrid) - 1
 
-            thisspectra['taureal'] = taureal_pix[sl3]
-            thisspectra['taured'] = taured_pix[sl3]
-            thisspectra['delta'] = delta_pix[sl3]
+            spectaureal[sl2] = taureal_pix[sl3]
+            spectaured[sl2] = taured_pix[sl3]
+            specdelta[sl2] = delta_pix[sl3]
 
             # redshift distort the quasar position 
             Zqso = sightlines.Z_REAL[i]
@@ -124,7 +164,9 @@ def main(A):
             sightlines.Z_RED[i] = 1.0 / Dc.inv(dqso) - 1
 
         pool.map(convolve, range(len(sightlines)))
-    spectra.flush()
+    spectaureal.flush()
+    spectaured.flush()
+    specdelta.flush()
     sightlines.Z_RED.flush()
 
 if __name__ == '__main__':

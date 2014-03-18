@@ -55,9 +55,6 @@ class Config(object):
         for name in names:
             setattr(self, name, dict[name])
 
-    def FPGAmeanF(self, a):
-        return numpy.exp(-10**(self.FitB + self.FitA * numpy.log10(a)))
-
     def __init__(self, paramfile):
         str = file(paramfile).read().replace(';', ',').replace('#', ';')
         config = ConfigParser.ConfigParser()
@@ -118,8 +115,13 @@ class Config(object):
         Lambda0 = config.getfloat("FGPA", "Lambda0")
         # a pixel will be grid to grid. (grids are the edges)
         LogLamGrid = numpy.log10(Lambda0) + numpy.arange(3000) * 1e-4
-        FitA = config.getfloat("FGPA", "FitA")
-        FitB = config.getfloat("FGPA", "FitB")
+        MeanFractionA = config.getfloat("FGPA", "MeanFractionA")
+        MeanFractionB = config.getfloat("FGPA", "MeanFractionB")
+
+        VarFractionA = config.getfloat("FGPA", "VarFractionA")
+        VarFractionB = config.getfloat("FGPA", "VarFractionB")
+        VarFractionZ = config.getfloat("FGPA", "VarFractionZ")
+
         IGMTemperature = config.getfloat('FGPA', 'IGMTemperature')
 
         NmeshLyaBox = 2 ** (int(numpy.log2(BoxSize / NmeshEff / LogNormalScale) + 0.5))
@@ -131,9 +133,17 @@ class Config(object):
         print 'NmeshQSO is', NmeshQSO, 'grid', BoxSize / NmeshQSOEff
 
         self.export(locals(), [
-            'Beta', 'LogNormalScale', 'FitA', 'FitB',
+            'Beta', 'LogNormalScale',
             'NmeshLyaBox', 'QSOScale', 'NmeshQSO', 'NmeshQSOEff', 
             'IGMTemperature', 'LogLamGrid'] )
+
+        self.export(locals(), [
+        'MeanFractionA',
+        'MeanFractionB',
+        'VarFractionA',
+        'VarFractionB',
+        'VarFractionZ',
+        ])
 
 
         datadir = config.get("IO", "datadir")
@@ -163,11 +173,26 @@ class Config(object):
                 'DeltaField', 'ObjectIDField', 'VelField'])
 
         try:
-            SpectraOutput = config.get("Cosmology", "SpectraOutput")
+            SpectraOutputTauRed = config.get("Cosmology", "SpectraOutputTauRed")
         except ConfigParser.NoOptionError:
-            SpectraOutput = datadir + '/spectra.raw'
+            SpectraOutputTauRed = datadir + '/spectra-taured.raw'
 
-        self.export(locals(), ['SpectraOutput'])
+        try:
+            SpectraOutputTauReal = config.get("Cosmology", "SpectraOutputTauReal")
+        except ConfigParser.NoOptionError:
+            SpectraOutputTauReal = datadir + '/spectra-taureal.raw'
+
+        try:
+            SpectraOutputDelta = config.get("Cosmology", "SpectraOutputDelta")
+        except ConfigParser.NoOptionError:
+            SpectraOutputDelta = datadir + '/spectra-delta.raw'
+
+        self.export(locals(), [
+                'SpectraOutputTauRed',
+                'SpectraOutputTauReal',
+                'SpectraOutputDelta',
+                ])
+
     @Lazy
     def QSObias(self):
         """ returns a function evaluating QSO bias
@@ -411,6 +436,21 @@ def PowerSpectrum(A):
     power = k, p
     return power
 
+def MeanFractionModel(config):
+    A = config.MeanFractionA
+    B = config.MeanFractionB
+    def func(a):
+        return numpy.exp(A * a ** -B)
+    return func
+
+def VarFractionModel(config):
+    A = config.VarFractionA
+    B = config.VarFractionB
+    Z = config.VarFractionZ
+    mfm = MeanFractionModel(config)
+    def func(a):
+        return A * (1 / a / Z) ** B * mfm(a) ** 2
+    return func
 
 if __name__ == '__main__':
     from sys import argv
@@ -501,3 +541,5 @@ if __name__ == '__main__':
             self.PixelScale)
         return bins
 """
+
+

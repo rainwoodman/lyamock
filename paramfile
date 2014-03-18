@@ -27,5 +27,12 @@ Lambda0 = 3069.0
 QSOScale = 40000
 IGMTemperature = 1e4
 beta = 1.58
-FitA = -3.200
-FitB = -2.289
+
+# from KG LEE 1211.5146v2 eq 6
+MeanFractionA = -0.001845
+MeanFractionB = 3.924
+
+# from KG LEE 1211.5146v2 eq 7
+VarFractionA = 0.065
+VarFractionB = 3.8
+VarFractionZ = 3.25
