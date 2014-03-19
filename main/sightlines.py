@@ -1,7 +1,7 @@
 import numpy
 import sharedmem
-from args import Config
-from args import PowerSpectrum
+from common import Config
+from common import PowerSpectrum
 
 from scipy.ndimage import map_coordinates, spline_filter
 from lib.lazy import Lazy
@@ -151,7 +151,7 @@ def main(A):
                         raw = numpy.empty(len(QSOs), dtype=sightlinedtype)
                         raw['RA'] = QSOs.RA * 180 / numpy.pi
                         raw['DEC'] = QSOs.DEC * 180 / numpy.pi
-                        raw['Z_VI'] = -1.0
+                        raw['Z_RED'] = -1.0
                         raw['Z_REAL'] = QSOs.Z
                         raw.tofile(output)
                         output.flush()

@@ -1,10 +1,11 @@
 import numpy
 import sharedmem
-from args import Config
-from args import PowerSpectrum
+from common import Config
+from common import PowerSpectrum
 
 from sys import argv
 from lib import density
+
 def main():
     A = Config(argv[1])
     print initlya(A)

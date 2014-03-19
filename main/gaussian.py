@@ -1,6 +1,6 @@
 import numpy
-from args import Config
-from args import PowerSpectrum
+from common import Config
+from common import PowerSpectrum
 from lib.bresenham import drawline
 import sharedmem
 from lib import density

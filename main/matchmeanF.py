@@ -3,9 +3,9 @@ import sharedmem
 from scipy.optimize import brentq
 from scipy.integrate import romberg
 
-from args import Config
-from args import MeanFractionModel
-from args import VarFractionModel
+from common import Config
+from common import MeanFractionModel
+from common import VarFractionModel
 from convolve import SpectraOutput
 
 def main(A):
@@ -18,14 +18,17 @@ def main(A):
     varfractionmodel = VarFractionModel(A)
     meanfractionmodel = MeanFractionModel(A)
 
-    Nbins = 8
+    Nbins = 64
     zBins = numpy.linspace(2.0, 4.0, Nbins + 1, endpoint=True)
     
     z = 0.5 * (zBins[1:] + zBins[:-1])
-    A = numpy.empty_like(z)
-    for i in range(Nbins):
-        A[i], E, V = fitRange(zBins[i], zBins[i + 1], spectra.taured)
-        print A[i], z[i], E, meanfractionmodel(1 / (1 + z[i])), V, varfractionmodel(1 / (1 + z[i]))
+    A = sharedmem.empty(z.shape)
+    with sharedmem.MapReduce() as pool:
+        def work(i):
+            A[i], E, V = fitRange(zBins[i], zBins[i + 1], spectra.taured)
+            with pool.ordered:
+                print A[i], z[i], E, meanfractionmodel(1 / (1 + z[i])), V, varfractionmodel(1 / (1 + z[i]))
+        pool.map(work, range(Nbins))
     print A, z
 
 def fitRange(zMin, zMax, field):

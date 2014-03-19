@@ -1,7 +1,7 @@
 import numpy
 import sharedmem
 
-from args import Config
+from common import Config
 from sightlines import Sightlines
 from lib.lazy import Lazy
 from lib.interp1d import  interp1d
