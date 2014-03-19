@@ -13,7 +13,7 @@ def main():
 def initlya(A):
     print 'measuring Lya cloud scale fluctuation with NBox Boxes'
     powerspec = PowerSpectrum(A)
-    NBox = 8
+    NBox = 1
     # fill the lya resolution small boxes
     deltalya = sharedmem.empty((NBox, 
         A.NmeshLyaBox, A.NmeshLyaBox, A.NmeshLyaBox))
@@ -23,7 +23,7 @@ def initlya(A):
         # this is the kernel to correct for log normal transformation
         # as it matters when we get to near the JeansScale
         def kernel(kx, ky, kz, k):
-            f2 = 1 / (1 + (A.LogNormalScale / (2 * numpy.pi) * k) ** 2)
+            f2 = 1 / (1 + (A.LogNormalScale * k) ** 2)
             return f2
   
         cutoff = 0.5 * 2 * numpy.pi / A.BoxSize * A.NmeshEff
@@ -38,8 +38,13 @@ def initlya(A):
         with sharedmem.Pool() as pool:
             pool.map(work, range(NBox))
 
+    D2 = A.cosmology.Dplus(1 / 3.0) / A.cosmology.Dplus(1.0)
+    D3 = A.cosmology.Dplus(1 / 4.0) / A.cosmology.Dplus(1.0)
     print 'lya field', 'mean', deltalya.mean(), 'var', deltalya.var()
-    return deltalya.var()
+    print 'growth factor at z=2.0, 3.0', D2, D3
+    Var = deltalya.var()
+    print 'variance adjusted to z=2.0, z=3.0', D2 ** 2 * Var, D3 **2 * Var
+    return Var
 
 if __name__ == '__main__':
     main()

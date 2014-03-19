@@ -111,6 +111,10 @@ class Config(object):
 
         QSOScale = config.getfloat("FGPA", "QSOscale")
         Beta = config.getfloat("FGPA", "Beta")
+
+        # a good value of LogNormalScale is 250 Kpc/h, which gives
+        # a sigma of ~ 1.0 at z=3.0, agreeing with Bi & Davidson 1997.
+
         LogNormalScale = config.getfloat("FGPA", "LogNormalScale")
         Lambda0 = config.getfloat("FGPA", "Lambda0")
         # a pixel will be grid to grid. (grids are the edges)
@@ -124,7 +128,9 @@ class Config(object):
 
         IGMTemperature = config.getfloat('FGPA', 'IGMTemperature')
 
-        NmeshLyaBox = 2 ** (int(numpy.log2(BoxSize / NmeshEff / LogNormalScale) + 0.5))
+        # make sure it is smaller than the LogNormalScaler
+        NmeshLyaBox = 2 ** (int(numpy.log2(BoxSize / NmeshEff /
+LogNormalScale) + 1))
         NmeshQSO = 2 ** (int(numpy.log2(BoxSize / Nrep / QSOScale) + 0.5))
         if NmeshQSO < 1: NmeshQSO = 1
 
