@@ -71,22 +71,93 @@ class SpectraOutput(object):
         Dc = self.config.cosmology.Dc(a) * self.config.DH
         return self.Faker(Dc)
 
+class SpectraMaker(object):
+    def __init__(self, config):
+        self.sightlines = Sightlines(config)
+        self.deltafield = numpy.memmap(config.DeltaField, mode='r', dtype='f4')
+        self.velfield = numpy.memmap(config.VelField, mode='r', dtype='f4')
+        self.var = numpy.loadtxt(config.datadir + '/gaussian-variance.txt')
+        self.config = config
+        # to preload these properties.
+        self.Dplus = config.cosmology.Dplus
+        self.FOmega  = config.cosmology.FOmega
+        self.Dc = config.cosmology.Dc
+        self.Ea = config.cosmology.Ea
+
+
+    def convolve(self, i):
+        # from Rupert
+        # 0.12849 = sqrt( 2 KBT / Mproton) in km/s
+        # He didn't have 0.5 in the kernel.
+        # we do
+        SQRT_KELVIN_TO_KMS = 0.12849 / 2. ** 0.5
+
+        config = self.config
+        Dplus = config.cosmology.Dplus
+        FOmega  = config.cosmology.FOmega
+        Dc = config.cosmology.Dc
+        Ea = config.cosmology.Ea
+        sightlines = self.sightlines
+        deltafield = self.deltafield
+        velfield = self.velfield
+        var = self.var
+
+        sl1 = slice(sightlines.SampleOffset[i], 
+                sightlines.SampleOffset[i] + sightlines.Nsamples[i])
+
+        delta = deltafield[sl1]
+        losdisp = velfield[sl1]
+
+        # dreal is in Hubble distance units
+        dreal = (sightlines.R1[i] + \
+            numpy.arange(sightlines.Nsamples[i]) \
+            * config.LogNormalScale) / config.DH
+
+        # redshift distortion
+        a = Dc.inv(dreal)
+        Dfactor = Dplus(a) / Dplus(1.0)
+        # rsd is also in Hubble distance units
+        rsd = losdisp * FOmega(a) * Dfactor / config.DH
+        dred = dreal + rsd
+
+        # thermal broadening
+        deltaLN = numpy.exp(Dfactor * delta - (Dfactor ** 2 * var) * 0.5)
+        T = config.IGMTemperature * (1 + deltaLN) ** (5. / 3. - 1)
+        vtherm = SQRT_KELVIN_TO_KMS * T ** 0.5
+        dtherm = vtherm / config.C / (a * Ea(a))
+
+        # tau is proportional to taureal, modulated by a slow
+        # function A(z), see LeGoff or Croft
+        taureal = numpy.float32(deltaLN ** config.Beta) * config.LogNormalScale
+        taured = numpy.float32(irconvolve(dreal, dred, taureal,
+            dtherm))
+        assert not numpy.isnan(taured).any()
+
+        loglam = numpy.log10(1216.0 / a)
+        LogLamGrid = sightlines.GetPixelLogLamBins(i)
+
+        taureal_pix = splat(loglam, taureal, LogLamGrid)
+        taured_pix = splat(loglam, taured, LogLamGrid)
+        delta_pix = splat(loglam, 1 + delta, LogLamGrid) / splat(loglam, 1.0, LogLamGrid) - 1
+
+        # redshift distort the quasar position 
+        Zqso = sightlines.Z_REAL[i]
+        dqso = Dc(1 / (Zqso + 1.0))
+        dqso = dqso + numpy.interp(dqso, dreal, rsd)
+        Zqso = 1.0 / Dc.inv(dqso) - 1
+
+        return (Zqso, taureal_pix[1:-1], taured_pix[1:-1], delta_pix[1:-1])
+
+
 def main(A):
     """convolve the tau(mass) field, 
     add in thermal broadening and redshift distortion """
-    global sightlines
-    global spectra
-    global velfield
-    global deltafield
 
-    # from Rupert
-    # 0.12849 = sqrt( 2 KBT / Mproton) in km/s
-    # He didn't have 0.5 in the kernel.
-    # we do
 
-    SQRT_KELVIN_TO_KMS = 0.12849 / 2. ** 0.5
+    maker = SpectraMaker(A)
 
-    sightlines = Sightlines(A)
+    sightlines = maker.sightlines
+   
     Npixels = sightlines.Npixels.sum()
 
     spectaureal = numpy.memmap(A.SpectraOutputTauReal, mode='w+', 
@@ -96,74 +167,18 @@ def main(A):
     specdelta = numpy.memmap(A.SpectraOutputDelta, mode='w+', 
             dtype='f4', shape=Npixels)
 
-    var = numpy.loadtxt(A.datadir + '/gaussian-variance.txt')
-    print var
-
-    velfield = numpy.memmap(A.VelField, mode='r', dtype='f4')
-    deltafield = numpy.memmap(A.DeltaField, mode='r', dtype='f4')
-
-    Dplus = A.cosmology.Dplus
-    FOmega  = A.cosmology.FOmega
-    Dc = A.cosmology.Dc
-    Ea = A.cosmology.Ea
-   
     with sharedmem.MapReduce() as pool:
-        def convolve(i):
-            sl1 = slice(sightlines.SampleOffset[i], 
-                    sightlines.SampleOffset[i] + sightlines.Nsamples[i])
+        def work(i):
             sl2 = slice(sightlines.PixelOffset[i], 
                     sightlines.PixelOffset[i] + sightlines.Npixels[i])
+            Z_red, taureal_pix, taured_pix, delta_pix = maker.convolve(i)
+            spectaureal[sl2] = taureal_pix
+            spectaured[sl2] = taured_pix
+            specdelta[sl2] = delta_pix
+            sightlines.Z_RED[i] = Z_red
 
-            # assert Npixels and LogLamGridInd are consistent!
-            # offset 1 here is to neglect the first pixel 
-            sl3 = slice(1 + sightlines.LogLamGridIndMin[i],
-                        1 + sightlines.LogLamGridIndMax[i])
+        pool.map(work, range(len(sightlines)))
 
-            delta = deltafield[sl1]
-            losdisp = velfield[sl1]
-
-            # dreal is in Hubble distance units
-            dreal = sightlines.R1[i] + \
-                numpy.arange(sightlines.Nsamples[i]) \
-                * A.LogNormalScale / A.DH
-
-            # redshift distortion
-            a = Dc.inv(dreal)
-            Dfactor = Dplus(a) / Dplus(1.0)
-            # rsd is also in Hubble distance units
-            rsd = losdisp * FOmega(a) * Dfactor / A.DH
-            dred = dreal + rsd
-
-            # thermal broadening
-            deltaLN = numpy.exp(Dfactor * delta - (Dfactor ** 2 * var) * 0.5)
-            T = A.IGMTemperature * (1 + deltaLN) ** (5. / 3. - 1)
-            vtherm = SQRT_KELVIN_TO_KMS * T ** 0.5
-            dtherm = vtherm / A.C / (a * Ea(a))
-
-            # tau is proportional to taureal, modulated by a slow
-            # function A(z), see LeGoff or Croft
-            taureal = numpy.float32(deltaLN ** A.Beta) * A.LogNormalScale
-            taured = numpy.float32(irconvolve(dreal, dred, taureal,
-                dtherm))
-            assert not numpy.isnan(taured).any()
-
-            loglam = numpy.log10(1216.0 / a)
-
-            taureal_pix = splat(loglam, taureal, A.LogLamGrid)
-            taured_pix = splat(loglam, taured, A.LogLamGrid)
-            delta_pix = splat(loglam, 1 + delta, A.LogLamGrid) / splat(loglam, 1.0, A.LogLamGrid) - 1
-
-            spectaureal[sl2] = taureal_pix[sl3]
-            spectaured[sl2] = taured_pix[sl3]
-            specdelta[sl2] = delta_pix[sl3]
-
-            # redshift distort the quasar position 
-            Zqso = sightlines.Z_REAL[i]
-            dqso = Dc(1 / (Zqso + 1.0))
-            dqso = dqso + numpy.interp(dqso, dreal, rsd)
-            sightlines.Z_RED[i] = 1.0 / Dc.inv(dqso) - 1
-
-        pool.map(convolve, range(len(sightlines)))
     spectaureal.flush()
     spectaured.flush()
     specdelta.flush()

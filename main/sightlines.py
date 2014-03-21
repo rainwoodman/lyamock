@@ -18,13 +18,28 @@ sightlinedtype=numpy.dtype([('RA', 'f8'),
                              ])
 
 class Sightlines(object):
-    def __init__(self, config):
+    def __init__(self, config, LogLamMin=None, LogLamMax=None):
+        """ create a sightline catelogue.
+
+            if LogLamMin and LogLamMax are given,
+            each sightline is chopped at these wave lengths.
+
+            otherwise the lines will cover from 1026 to 1216.   
+        """
+
         self.data = numpy.fromfile(config.QSOCatelog, 
                 dtype=sightlinedtype)
         self.Z_REAL = self.data['Z_REAL']
         self.DEC = self.data['DEC']
         self.RA = self.data['RA']
         self.config = config
+        self.LogLamMin = numpy.log10((self.Z_REAL + 1) * 1026.)
+        if LogLamMin is not None:
+            self.LogLamMin = numpy.maximium(LogLamMin, self.LogLamMin)
+
+        self.LogLamMax = numpy.log10((self.Z_REAL + 1) * 1216.)
+        if LogLamMax is not None:
+            self.LogLamMax = numpy.minimium(LogLamMax, self.LogLamMax)
 
         # Z_RED is writable!
         data2 = numpy.memmap(config.QSOCatelog, dtype=sightlinedtype, mode='r+')
@@ -35,6 +50,7 @@ class Sightlines(object):
 
     @Lazy
     def SampleOffset(self):
+        """ the sample layout is decided from Z_REAL """
         rt = numpy.empty(len(self), dtype='intp')
         rt[0] = 0
         rt[1:] = numpy.cumsum(self.Nsamples)[:-1]
@@ -42,26 +58,35 @@ class Sightlines(object):
 
     @Lazy
     def R1(self):
+        """ to get the Dc grid in Kpc/h units, use 
+            R1 + arange(Nsamples) * config.LogNormalScale
+        """
         cosmology = self.config.cosmology
-        R1 = cosmology.Dc(1 / (self.Zmin + 1))
+        a1 = 1216. / (1026. * (self.Z_REAL + 1))
+        R1 = cosmology.Dc(a1) * self.config.DH
         return R1
+
+    @Lazy
+    def R2(self):
+        cosmology = self.config.cosmology
+        a2 = 1. / (self.Z_REAL + 1)
+        R2 = cosmology.Dc(a2) * self.config.DH
+        return R2
 
     @Lazy
     def Nsamples(self):
         cosmology = self.config.cosmology
-        R1 = cosmology.Dc(1 / (self.Zmin + 1))
-        R2 = cosmology.Dc(1 / (self.Zmax + 1))
-        return numpy.int32((R2 - R1) * self.config.DH / self.config.LogNormalScale)
+        return numpy.int32((self.R2 - self.R1) / self.config.LogNormalScale)
 
     @Lazy
     def x1(self):
         cosmology = self.config.cosmology
-        return self.dir * cosmology.Dc(1 / (self.Zmin + 1))[:, None] * self.config.DH
+        return self.dir * self.R1[:, None]
 
     @Lazy
     def x2(self):
         cosmology = self.config.cosmology
-        return self.dir * cosmology.Dc(1 / (self.Zmax + 1))[:, None] * self.config.DH
+        return self.dir * self.R2[:, None]
 
     @Lazy
     def dir(self):
@@ -70,37 +95,41 @@ class Sightlines(object):
         dir[:, 1] = numpy.sin(self.RA) * numpy.cos(self.DEC)
         dir[:, 2] = numpy.sin(self.DEC)
         return dir
-    @Lazy
-    def Zmax(self):
-        return (self.Z_REAL + 1) * 1216. / 1216 - 1
-    @Lazy
-    def Zmin(self):
-        return (self.Z_REAL + 1) * 1026. / 1216 - 1
-
-    @Lazy
-    def LogLamMin(self):
-        return numpy.log10((self.Zmin + 1) * 1216.)
-
-    @Lazy
-    def LogLamMax(self):
-        return numpy.log10((self.Zmax + 1) * 1216.)
 
     @Lazy
     def LogLamGridIndMin(self):
         rt = numpy.searchsorted(self.config.LogLamGrid, 
-                    self.LogLamMin, side='left')
+                    self.LogLamMin, side='right')
         return rt
     @Lazy
     def LogLamGridIndMax(self):
         rt = numpy.searchsorted(self.config.LogLamGrid, 
-                    self.LogLamMax, side='right')
+                    self.LogLamMax, side='left')
         # probably no need to care if it goes out of limit. 
         # really should have used 1e-4 binning than the search but
         # need to deal with the clipping later on.
+        # Max is exclusive!
+        # AKA the right edge of the last loglam bin is at Max - 1
+        # in config.LogLamGrid
+        toosmall = rt <= self.LogLamGridIndMin
+        rt[toosmall] = self.LogLamGridIndMin[toosmall] + 1
         return rt
+
     @Lazy
     def Npixels(self):
-        return self.LogLamGridIndMax - self.LogLamGridIndMin
+        # This is always 1 smaller than the number of Bins edges. 
+        return self.LogLamGridIndMax - self.LogLamGridIndMin - 1
+
+    def GetPixelLogLamBins(self, i):
+        sl = slice(self.LogLamGridIndMin[i], self.LogLamGridIndMax[i])
+        bins = self.config.LogLamGrid[sl]
+        assert len(bins) == self.Npixels[i] + 1
+        return bins
+
+    def GetPixelLogLamCenter(self, i):
+        bins = self.GetPixelLogLamBins(i)
+        return 0.5 * (bins[1:] + bins[:-1])
+
     @Lazy
     def PixelOffset(self):
         rt = numpy.empty(len(self), dtype='intp')
@@ -161,7 +190,6 @@ def main(A):
         NQSO = numpy.sum(pool.map(work, A.yieldwork(), star=True))
 
     sightlines = Sightlines(A)
-    print sightlines.Zmax, sightlines.Zmin
     print sightlines.LogLamMax, sightlines.LogLamMin
     print sightlines.LogLamGridIndMax, sightlines.LogLamGridIndMin
 

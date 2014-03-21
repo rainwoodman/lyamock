@@ -6,7 +6,7 @@ fibers=DR10Q_alpha_short_v3.dat
 Zmin = 2.0
 Zmax = 3.0
 NmeshCoarse = 32
-NmeshEff = 256
+NmeshEff = 1024
 NRep = 4
 Seed = 100
 

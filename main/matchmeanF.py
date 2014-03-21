@@ -6,6 +6,7 @@ from scipy.integrate import romberg
 from common import Config
 from common import MeanFractionModel
 from common import VarFractionModel
+from sightlines import Sightlines
 from convolve import SpectraOutput
 
 def main(A):
@@ -17,28 +18,34 @@ def main(A):
     spectra = SpectraOutput(A)
     varfractionmodel = VarFractionModel(A)
     meanfractionmodel = MeanFractionModel(A)
+    fname = A.datadir + '/matchmeanFoutput.npz'
 
     Nbins = 64
     zBins = numpy.linspace(2.0, 4.0, Nbins + 1, endpoint=True)
-    
+    LogLamBins = numpy.log10(1216.0 * (1 + zBins ))
     z = 0.5 * (zBins[1:] + zBins[:-1])
-    A = sharedmem.empty(z.shape)
+    Af = sharedmem.empty(z.shape)
+    V = sharedmem.empty(z.shape)
+    E = sharedmem.empty(z.shape)
     with sharedmem.MapReduce() as pool:
         def work(i):
-            A[i], E, V = fitRange(zBins[i], zBins[i + 1], spectra.taured)
+            Af[i], E[i], V[i] = fitRange(LogLamBins[i], LogLamBins[i + 1], spectra.taured)
             with pool.ordered:
-                print A[i], z[i], E, meanfractionmodel(1 / (1 + z[i])), V, varfractionmodel(1 / (1 + z[i]))
+                print Af[i], z[i], E[i], meanfractionmodel(1 / (1 + z[i])), V[i], varfractionmodel(1 / (1 + z[i]))
         pool.map(work, range(Nbins))
-    print A, z
+    numpy.savez(fname, Af=Af, z=z, V=V, E=E)
+    print Af, z
 
-def fitRange(zMin, zMax, field):
+def fitRange(LogLamMin, LogLamMax, field):
     # field needs to be spectra.taured or spectra.taureal
-
-    # now lets pick the pixels
-    LogLamMin = numpy.log10((zMin + 1) * 1216.)
-    LogLamMax = numpy.log10((zMax + 1) * 1216.)
-
     Npixels = numpy.empty(len(spectra), 'intp')
+
+    # What is the mean of the model?
+    def fun(loglam):
+        a = 1216. / 10 ** loglam 
+        return meanfractionmodel(a)
+    data = romberg(fun, LogLamMin, LogLamMax) / (LogLamMax - LogLamMin)
+    print LogLamMin, LogLamMax, data, 
 
     for i in range(len(spectra)):
         LogLam = spectra.LogLam[i]
@@ -53,12 +60,6 @@ def fitRange(zMin, zMax, field):
         mask = (LogLam >= LogLamMin) & (LogLam <= LogLamMax)
         sl = slice(PixelOffset[i], PixelOffset[i] + Npixels[i])
         values[sl] = field[i][mask]
-
-    # What is the mean of the model?
-    aMin = 1 / (1. + zMin)
-    aMax = 1 / (1. + zMax)
-
-    data = romberg(meanfractionmodel, aMin, aMax) / (aMax - aMin)
 
     # OK we have collected the tau values now use brentq to 
     # solve for A.
