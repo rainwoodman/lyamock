@@ -72,8 +72,10 @@ class SpectraOutput(object):
         return self.Faker(Dc)
 
 class SpectraMaker(object):
-    def __init__(self, config):
-        self.sightlines = Sightlines(config)
+    def __init__(self, config, sightlines, Af, Bf):
+        self.Af = Af
+        self.Bf = Bf
+        self.sightlines = sightlines
         self.deltafield = numpy.memmap(config.DeltaField, mode='r', dtype='f4')
         self.velfield = numpy.memmap(config.VelField, mode='r', dtype='f4')
         self.var = numpy.loadtxt(config.datadir + '/gaussian-variance.txt')
@@ -115,6 +117,8 @@ class SpectraMaker(object):
 
         # redshift distortion
         a = Dc.inv(dreal)
+        Af = self.Af(a)
+        Bf = self.Bf(a)
         Dfactor = Dplus(a) / Dplus(1.0)
         # rsd is also in Hubble distance units
         rsd = losdisp * FOmega(a) * Dfactor / config.DH
@@ -128,7 +132,7 @@ class SpectraMaker(object):
 
         # tau is proportional to taureal, modulated by a slow
         # function A(z), see LeGoff or Croft
-        taureal = numpy.float32(deltaLN ** config.Beta) * config.LogNormalScale
+        taureal = Af * numpy.float32(deltaLN ** Bf) * config.LogNormalScale
         taured = numpy.float32(irconvolve(dreal, dred, taureal,
             dtherm))
         assert not numpy.isnan(taured).any()
@@ -154,9 +158,8 @@ def main(A):
     add in thermal broadening and redshift distortion """
 
 
-    maker = SpectraMaker(A)
-
-    sightlines = maker.sightlines
+    sightlines = Sightlines(A)
+    maker = SpectraMaker(A, sightlines)
    
     Npixels = sightlines.Npixels.sum()
 
