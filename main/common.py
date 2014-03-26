@@ -179,6 +179,12 @@ LogNormalScale) + 1))
                 'DeltaField', 'ObjectIDField', 'VelField'])
 
         try:
+            MatchMeanFractionOutput = config.get("Cosmology", 
+                    "MatchMeanFractionOutput")
+        except ConfigParser.NoOptionError:
+            MatchMeanFractionOutput = datadir + '/matchmeanFoutput.npz'
+
+        try:
             SpectraOutputTauRed = config.get("Cosmology", "SpectraOutputTauRed")
         except ConfigParser.NoOptionError:
             SpectraOutputTauRed = datadir + '/spectra-taured.raw'
@@ -194,6 +200,7 @@ LogNormalScale) + 1))
             SpectraOutputDelta = datadir + '/spectra-delta.raw'
 
         self.export(locals(), [
+                'MatchMeanFractionOutput',
                 'SpectraOutputTauRed',
                 'SpectraOutputTauReal',
                 'SpectraOutputDelta',

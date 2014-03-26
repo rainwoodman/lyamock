@@ -35,11 +35,11 @@ class Sightlines(object):
         self.config = config
         self.LogLamMin = numpy.log10((self.Z_REAL + 1) * 1026.)
         if LogLamMin is not None:
-            self.LogLamMin = numpy.maximium(LogLamMin, self.LogLamMin)
+            self.LogLamMin = numpy.maximum(LogLamMin, self.LogLamMin)
 
         self.LogLamMax = numpy.log10((self.Z_REAL + 1) * 1216.)
         if LogLamMax is not None:
-            self.LogLamMax = numpy.minimium(LogLamMax, self.LogLamMax)
+            self.LogLamMax = numpy.minimum(LogLamMax, self.LogLamMax)
 
         # Z_RED is writable!
         data2 = numpy.memmap(config.QSOCatelog, dtype=sightlinedtype, mode='r+')
@@ -49,8 +49,36 @@ class Sightlines(object):
         return len(self.data)
 
     @Lazy
+    def ActiveSampleStart(self):
+        """ the sample layout is decided from LambdaMin / LambdaMax;
+            this is a safe offset rel to SampleOffset,
+            and with added padding so that thermal convolution is safe.
+        """
+        cosmology = self.config.cosmology
+        a1 = 1216.0 / 10 ** self.LogLamMin 
+        R1 = cosmology.Dc(a1) * self.config.DH
+        R1full = self.R1
+        rel = numpy.int32((R1 - R1full - 1000) // self.config.LogNormalScale)
+        rel[rel < 0] = 0
+        big = rel > self.Nsamples
+        rel[big] = self.Nsamples[big]
+        return rel
+
+    @Lazy
+    def ActiveSampleEnd(self):
+        cosmology = self.config.cosmology
+        a2 = 1216.0 / 10 ** self.LogLamMax
+        R2 = cosmology.Dc(a2) * self.config.DH
+        R1full = self.R1
+        rel = numpy.int32((R2 - R1full + 1000) // self.config.LogNormalScale)
+        rel[rel < 0] = 0
+        big = rel > self.Nsamples
+        rel[big] = self.Nsamples[big]
+        return rel
+
+    @Lazy
     def SampleOffset(self):
-        """ the sample layout is decided from Z_REAL """
+        """ the full sample layout is decided from Z_REAL used by gaussian"""
         rt = numpy.empty(len(self), dtype='intp')
         rt[0] = 0
         rt[1:] = numpy.cumsum(self.Nsamples)[:-1]
