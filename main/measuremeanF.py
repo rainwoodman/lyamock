@@ -1,13 +1,15 @@
 import numpy
 import sharedmem
+
 from common import Config
-from lib.lazy import Lazy
-from lib.chunkmap import chunkmap
 from common import MeanFractionModel
 from common import VarFractionModel
-from sightlines import Sightlines
+from common import Sightlines
+from common import SpectraOutput
 
-from spectra import SpectraOutput
+from lib.lazy import Lazy
+from lib.chunkmap import chunkmap
+
 
 def main(A):
     sightlines = Sightlines(A)

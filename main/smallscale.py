@@ -1,5 +1,6 @@
 import numpy
 import sharedmem
+
 from common import Config
 from common import PowerSpectrum
 

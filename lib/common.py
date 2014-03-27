@@ -7,347 +7,134 @@ from scipy.interpolate import interp1d
 from scipy.interpolate import UnivariateSpline
 from lib.cosmology import Cosmology, Lazy
 
-
-bitmapdtype = numpy.dtype([
-    ('objectid', 'i4'),
-    ('lambda', 'f4'), 
-    ('Z', 'f4'), 
-    ('delta', 'f4'), 
-    ('F', 'f4'), 
-    ('Freal', 'f4'), 
-    ('pos', ('f4', 3)), 
-    ])
-
 class Config(object):
-    def export(self, dict, names):
-        for name in names:
-            setattr(self, name, dict[name])
-
     def __init__(self, paramfile):
-        str = file(paramfile).read().replace(';', ',').replace('#', ';')
+        s = file(paramfile).read().replace(';', ',').replace('#', ';')
         config = ConfigParser.ConfigParser()
-        config.readfp(StringIO.StringIO(str))
+        config.readfp(StringIO.StringIO(s))
 
         self.config = config
 
-        Sigma8 = config.getfloat("Cosmology", "Sigma8")
-        OmegaM = config.getfloat("Cosmology", "OmegaM")
-        OmegaB = config.getfloat("Cosmology", "OmegaB")
-        OmegaL = config.getfloat("Cosmology", "OmegaL")
-        BoxPadding = 2000
-        h = config.getfloat("Cosmology", "h")
-        G = 43007.1
-        C = 299792.458
-        H0 = 0.1
-        DH = C / H0
-        cosmology = Cosmology(M=OmegaM, 
-            L=OmegaL, B=OmegaB, h=h, sigma8=Sigma8)
+        def export(section, names, type=str, **kwargs):
+            if not isinstance(names, (list, tuple)):
+                names = [names, ]
 
-        self.export(locals(), [
-            'Sigma8', 'OmegaM', 'OmegaB', 'OmegaL',
-            'h', 'G', 'C', 'H0', 'DH', 'cosmology'])
+            for name in names:
+                try:
+                    s = self.config.get(section, name)
+                    v = type(s)
+                except ConfigParser.NoOptionError:
+                    if 'default' in kwargs:
+                        v = kwargs['default']
+                    else:
+                        raise
+                setattr(self, name, v)
 
-        Seed = config.getint("IC", "Seed")
-        NmeshCoarse = config.getint("IC", "NmeshCoarse")
-        NmeshEff = config.getint("IC", "NmeshEff")
-        Nrep = config.getint("IC", "Nrep")
-        Zmin = config.getfloat("IC", "Zmin")
-        Zmax = config.getfloat("IC", "Zmax")
-        BoxSize = cosmology.Dc(1 / (1 + Zmax)) * DH * 2 + BoxPadding * 2
+        export("Cosmology", [
+            "Sigma8",
+            "OmegaM",
+            "OmegaB",
+            "OmegaL", 
+            "h"] , type=float)
 
-        KSplit = 0.5 * 2 * numpy.pi / BoxSize * NmeshCoarse * 1.0
+        export("Cosmology", "G", type=float, default=43007.1)
+        export("Cosmology", "C", type=float, default=299792.458)
+        export("Cosmology", "H0", type=float, default=0.1)
 
-        assert NmeshEff % Nrep == 0
-        assert NmeshEff % NmeshCoarse == 0
 
-        NmeshFine = NmeshEff / Nrep
+        self.DH = self.C / self.H0
+        self.cosmology = Cosmology(M=self.OmegaM, 
+            L=self.OmegaL, B=self.OmegaB, h=self.h, sigma8=self.Sigma8)
 
-        RNG = numpy.random.RandomState(Seed)
-        SeedTable = RNG.randint(1<<21 - 1, size=(Nrep,) * 3)
+        export("IC", [
+            "Seed",
+            "NmeshCoarse",
+            "NmeshEff",
+            "Nrep"], type=int)
 
-        self.export(locals(), [
-            'Seed', 'RNG', 'SeedTable', 'BoxSize', 'Zmin', 'Zmax', 'NmeshFine',
-            'NmeshCoarse', 'KSplit', 'BoxPadding',
-            'NmeshEff', 'Nrep'])
+        export("IC", ['Zmin', 'Zmax'], type=float)
+        export("IC", "BoxPadding", type=float, default=2000.)
 
-        print 'BoxSize is', BoxSize
-        print 'NmeshFine is', NmeshFine 
-        print 'Nrep is', Nrep, 'grid', BoxSize / Nrep
-        print 'NmeshEff is', NmeshEff, 'grid', BoxSize / NmeshEff
-        print 'NmeshCoarse is', NmeshCoarse, 'grid', BoxSize / NmeshCoarse
-        print 'KSplit is', KSplit, 'in realspace', 2 * numpy.pi / KSplit
 
-        QSOScale = config.getfloat("FGPA", "QSOscale")
-        Beta = config.getfloat("FGPA", "Beta")
+        self.BoxSize = self.cosmology.Dc(1 / (1 + self.Zmax)) * self.DH * 2 + self.BoxPadding * 2
+        self.KSplit = 0.5 * 2 * numpy.pi / self.BoxSize * self.NmeshCoarse * 1.0
+
+        assert self.NmeshEff % self.Nrep == 0
+        assert self.NmeshEff % self.NmeshCoarse == 0
+
+        self.NmeshFine = self.NmeshEff / self.Nrep
+
+        self.RNG = numpy.random.RandomState(self.Seed)
+        self.SeedTable = self.RNG.randint(1<<21 - 1, size=(self.Nrep,) * 3)
 
         # a good value of LogNormalScale is 250 Kpc/h, which gives
         # a sigma of ~ 1.0 at z=3.0, agreeing with Bi & Davidson 1997.
 
-        LogNormalScale = config.getfloat("FGPA", "LogNormalScale")
-        Lambda0 = config.getfloat("FGPA", "Lambda0")
+        export("FGPA", [
+            "LogNormalScale",
+            "Lambda0",
+            "MeanFractionA",
+            "MeanFractionB",
+            "VarFractionA",
+            "VarFractionB",
+            "VarFractionZ",
+            "IGMTemperature",
+            ], type=float)
+
         # a pixel will be grid to grid. (grids are the edges)
-        LogLamGrid = numpy.log10(Lambda0) + numpy.arange(3000) * 1e-4
-        MeanFractionA = config.getfloat("FGPA", "MeanFractionA")
-        MeanFractionB = config.getfloat("FGPA", "MeanFractionB")
-
-        VarFractionA = config.getfloat("FGPA", "VarFractionA")
-        VarFractionB = config.getfloat("FGPA", "VarFractionB")
-        VarFractionZ = config.getfloat("FGPA", "VarFractionZ")
-
-        IGMTemperature = config.getfloat('FGPA', 'IGMTemperature')
+        self.LogLamGrid = numpy.log10(self.Lambda0) + numpy.arange(5000) * 1e-4
 
         # make sure it is smaller than the LogNormalScaler
-        NmeshLyaBox = 2 ** (int(numpy.log2(BoxSize / NmeshEff /
-LogNormalScale) + 1))
-        NmeshQSO = 2 ** (int(numpy.log2(BoxSize / Nrep / QSOScale) + 0.5))
-        if NmeshQSO < 1: NmeshQSO = 1
-
-        NmeshQSOEff = NmeshQSO * Nrep
-        print 'NmeshLyaBox is ', NmeshLyaBox, 'grid', BoxSize / NmeshEff / NmeshLyaBox
-        print 'NmeshQSO is', NmeshQSO, 'grid', BoxSize / NmeshQSOEff
-
-        self.export(locals(), [
-            'Beta', 'LogNormalScale',
-            'NmeshLyaBox', 'QSOScale', 'NmeshQSO', 'NmeshQSOEff', 
-            'IGMTemperature', 'LogLamGrid'] )
-
-        self.export(locals(), [
-        'MeanFractionA',
-        'MeanFractionB',
-        'VarFractionA',
-        'VarFractionB',
-        'VarFractionZ',
-        ])
+        self.NmeshLyaBox = 2 ** (int(numpy.log2(self.BoxSize / self.NmeshEff / self.LogNormalScale) + 1))
 
 
-        datadir = config.get("IO", "datadir")
-        try:
-            QSOCatelog = config.get("IO", "QSOCatelog")
-        except ConfigParser.NoOptionError:
-            QSOCatelog = datadir + '/QSOCatelog.raw'
-        try:
-            DeltaField = config.get("IO", "DeltaField")
-        except ConfigParser.NoOptionError:
-            DeltaField = datadir + '/DeltaField.raw'
-        try:
-            ObjectIDField = config.get("IO", "ObjectIDField")
-        except ConfigParser.NoOptionError:
-            ObjectIDField = datadir + '/ObjectIDField.raw'
-        try:
-            VelField = config.get("IO", "VelField")
-        except ConfigParser.NoOptionError:
-            VelField = datadir + '/VelField.raw'
+        export("Quasar", 
+                [
+                    "QSOBiasInput",
+                    "QSODensityInput",
+                    "SkymaskInput",
+                ] , 
+                default=None)
 
-        try:
-            PowerSpectrum = config.get("Cosmology", "PowerSpectrum")
-        except ConfigParser.NoOptionError:
-            PowerSpectrum = datadir + '/power.txt'
+        export("Quasar", "QSOScale", type=float)
 
-        self.export(locals(), ['datadir', 'QSOCatelog', 'PowerSpectrum', 
-                'DeltaField', 'ObjectIDField', 'VelField'])
+        self.NmeshQSO = 2 ** (int(numpy.log2(self.BoxSize / self.Nrep / self.QSOScale) + 0.5))
+        if self.NmeshQSO < 1: self.NmeshQSO = 1
 
-        try:
-            MatchMeanFractionOutput = config.get("Cosmology", 
-                    "MatchMeanFractionOutput")
-        except ConfigParser.NoOptionError:
-            MatchMeanFractionOutput = datadir + '/matchmeanFoutput.npz'
-        try:
-            MeasureMeanFractionOutput = config.get("Cosmology", 
-                    "MeasureMeanFractionOutput")
-        except ConfigParser.NoOptionError:
-            MeasureMeanFractionOutput = datadir + '/measuremeanFoutput.npz'
+        export("Output", "datadir")
 
-        try:
-            SpectraOutputTauRed = config.get("Cosmology", "SpectraOutputTauRed")
-        except ConfigParser.NoOptionError:
-            SpectraOutputTauRed = datadir + '/spectra-taured.raw'
+        jn = lambda x: os.path.join(self.datadir, x)
+        export("Output", "PowerSpectrumCache", default=jn('power.txt'))
+        export("Output", "QSOCatelog", default=jn('QSOCatelog.raw'))
+        export("Output", "DeltaField", default=jn('DeltaField.raw'))
+        export("Output", "ObjectIDField", default=jn('ObjectIDField.raw'))
+        export("Output", "VelField", default=jn('VelField.raw'))
+        export("Output", "MatchMeanFractionOutput", default=jn('MatchMeanFractionOutput.npz'))
+        export("Output", "MeasureMeanFractionOutput", default=jn('MeasureMeanFractionOutput.npz'))
+        export("Output", "SpectraOutputTauRed", default=jn('SpectraOutputTauRed.raw'))
+        export("Output", "SpectraOutputTauReal", default=jn('SpectraOutputTauReal.raw'))
+        export("Output", "SpectraOutputDelta", default=jn('SpectraOutputDelta.raw'))
+        print str(self)
 
-        try:
-            SpectraOutputTauReal = config.get("Cosmology", "SpectraOutputTauReal")
-        except ConfigParser.NoOptionError:
-            SpectraOutputTauReal = datadir + '/spectra-taureal.raw'
-
-        try:
-            SpectraOutputDelta = config.get("Cosmology", "SpectraOutputDelta")
-        except ConfigParser.NoOptionError:
-            SpectraOutputDelta = datadir + '/spectra-delta.raw'
-
-        self.export(locals(), [
-                'MatchMeanFractionOutput',
-                'MeasureMeanFractionOutput',
-                'SpectraOutputTauRed',
-                'SpectraOutputTauReal',
-                'SpectraOutputDelta',
-                ])
-
-    @Lazy
-    def QSObias(self):
-        """ returns a function evaluating QSO bias
-            at given R
-
-            current file is copied from 
+    def __str__(self):
+        s = """
+        BoxSize = %(BoxSize)g
+        NmeshFine = %(NmeshFine)d
+        Nrep = %(Nrep)d
+        NmeshCoarse = %(NmeshCoarse)d
+        KSplit = %(KSplit)f
+        NmeshLyaBox = %(NmeshLyaBox)d
+        NmeshQSO = %(NmeshQSO)d
         """
-        config = self.config
-        string = """
-           0.24   1.41   0.18
-           0.49   1.38   0.06
-           0.80   1.45   0.38
-           1.03   1.83   0.03
-           1.23   2.37   0.25
-           1.41   1.92   0.50
-           1.58   2.42   0.40
-           1.74   2.79   0.47
-           1.92   3.62   0.49
-           2.10   2.99   1.42
-           2.40   4      5
-           3.20   6      2
-           4.0    10.5     3
-        """
-        try:
-            biasfile = config.get("QSO", "biasfile")
-            z, bias, err = numpy.loadtxt(biasfile, unpack=True)
-        except (ConfigParser.NoOptionError, ConfigParser.NoSectionError):
-            z, bias, err = numpy.fromstring(string, sep=' ').reshape(-1, 3).T
-        a = 1 / (z + 1.)
-        R = self.cosmology.Dc(a) * self.DH
-        spl = UnivariateSpline(R, bias, 1 / err)
-        return spl 
-
-    @Lazy
-    def QSOdensity(self):
-        """ returns a function evaluating 
-            mean QSO density at given R
-            the input QSOdensityfile, constains
-            two npy arrays, 
-            bins, the zbins (N + 1 entries)
-            count, the number count of QSOs in that bin, 
-            (N entries)
-
-            This file can be prepared with 
-            f = gaepsi.cosmology.agn.qlf_observer.
-            and output f(z)
-        """
-        string = """
-0.1 5.20571573185e-15 0.2 2.96627124784e-14
-0.4 5.94935402372e-14 0.6 6.02256554399e-14
-0.8 5.30889459081e-14 1.0 4.79606024125e-14
-1.2 4.37453636884e-14 1.4 3.98509187531e-14
-1.6 3.58656511045e-14 1.8 3.16185604541e-14
-2.0 2.71388657143e-14 2.2 2.25732139999e-14
-2.4 1.81159328576e-14 2.6 1.39619212926e-14
-2.8 1.02769869655e-14 3.0 7.17907201412e-15
-3.2 4.72732379062e-15 3.4 2.91919547441e-15
-3.6 1.69562293098e-15 3.8 9.54231503902e-16
-4.0 5.68664902877e-16 4.2 4.10471722414e-16
-4.4 3.68932895967e-16 4.6 3.64347275462e-16
-4.8 3.52067723866e-16 5.0 3.17466641007e-16
-5.2 2.60245877731e-16 5.4 1.96528168034e-16
-5.6 1.34140178176e-16 5.8 8.16047392053e-17
-6.0 4.37813317973e-17 """
-        try:
-            QSOdensity = self.config.get("QSO", "QSOdensityfile")
-            z = numpy.load(QSOdensity)['z']
-            density = numpy.load(QSOdensity)['density']
-            print 'using ', QSOdensity, 'for mean qso density'
-        except (ConfigParser.NoOptionError, ConfigParser.NoSectionError):
-            print 'using builtin i band limited hopkins qlf for mean qso density'
-            z, density = numpy.fromstring(string, sep=' ').reshape(-1, 2).T
-        a = 1 / (z + 1.)
-        R = self.cosmology.Dc(a) * self.DH
-        return interp1d(R, density, bounds_error=False,
-                fill_value=0.0)
+        return s % self.__dict__
 
 
-    @Lazy
-    def SurveyQSOdensity(self):
-        """ returns a function evaluating 
-            Survey QSO number density at given R
-            This will be adjusted by the sky mask
-
-            the input surveydensityfile, constains
-            two npy arrays, 
-            z
-            specdensity, dN / dz where N is number QSOs
-
-            The default is to use the SDSS DR9 count.
-        """
-        string = """
-0.0 34.0985107917 0.2 959.763566767 0.4 6605.80243392 0.6 32523.7675186
-0.8 72691.414628 1.0 26855.6444122 1.2 11530.0423145 1.4 12669.611195
-1.6 25099.5717001 1.8 22712.9437337 2.0 35654.3477467 2.2 153115.318974
-2.4 178890.569673 2.6 115889.244553 2.8 69022.9874509 3.0 56040.3877876
-3.2 41957.1799842 3.4 18310.9661606 3.6 11673.2289537 3.8 9949.67508789
-4.0 5060.53773401 4.2 2350.06892613 4.4 1150.65036452 4.6 767.760735547
-4.8 603.559006041 5.0 266.067138644 5.2 108.856505818 5.4 18.8484273619
-5.6 5.94102761023 5.8 4.30473603211 6.0 0.662939420386 
-"""
-        try:
-            QSOcount = self.config.get("QSO", "Surveydensityfile")
-            z = numpy.load(QSOdensity)['z']
-            specdensity = numpy.load(QSOdensity)['specdensity']
-        except (ConfigParser.NoOptionError, ConfigParser.NoSectionError):
-            print 'using builtin DR9 qso specdensity file'
-            z, specdensity = numpy.fromstring(string, sep=' ').reshape(-1, 2).T
-            
-        a = 1 / (z + 1)
-        R = self.cosmology.Dc(a) * self.DH
-        density = specdensity * (- a ** -2) * \
-        self.cosmology.aback(R / self.DH, nu=1) / self.DH / (4 * numpy.pi * R ** 2)
-        # adjust for sky 
-        density /= self.skymask.fraction
-        density[0] = 0
-        return interp1d(R, density, bounds_error=False, fill_value=0.0)
-
-    @Lazy
-    def skymask(self):
-        """ sky mask in mango healpix format """
-        try:
-            import chealpy
-        except ImportError:
-            print "chealpy is not installed, skymask is disabled"
-            def func(xyz):
-                return numpy.ones(shape=xyz.shape[0])
-            func.Nside = 4
-            func.fraction = 1.0
-            func.mask = numpy.ones(4)
-            return func 
-        try:
-            skymask = self.config.get("QSO", "skymaskfile")
-            skymask = numpy.loadtxt(skymask, skiprows=1)
-        except (ConfigParser.NoOptionError, ConfigParser.NoSectionError):
-            skymask = numpy.ones(2 * 2 * 12)
-        Nside = chealpy.npix2nside(len(skymask))
-        print 'using healpix sky mask Nside', Nside
-        def func(xyz):
-            """ look up the sky mask from xyz vectors
-                xyz is row vectors [..., 3] """
-            ipix = chealpy.vec2pix_nest(Nside, xyz)
-            #Nside, 0.5 * numpy.pi - dec, ra)
-            return skymask[ipix]
-
-        func.Nside = Nside
-        func.fraction = skymask.sum() / len(skymask)
-        func.mask = skymask
-        return func 
-         
     def yieldwork(self):
         for i in range(self.Nrep):
             for j in range(self.Nrep):
                 for k in range(self.Nrep):
                     yield i, j, k
-    @Lazy
-    def fibers(self):
-        fibers = self.config.get("IO", 'fibers')
-        array = numpy.loadtxt(fibers, usecols=(1, 2, 3, 4, 5, 6),
-            dtype=[
-                ('PLATE', 'i2'),
-                ('MJD', 'i4'),
-                ('FIBERID', 'i2'),
-                ('RA', 'f8'),
-                ('DEC', 'f8'),
-                ('Z_VI', 'f8')])
-        fibers = array[array['Z_VI'].argsort()]
-        return fibers
+
     def xyz2dc(self, xyz):
         """ returns the comoving distance of position xyz,
             xyz is in full box box units. (not any grids),
@@ -407,8 +194,116 @@ class Layout(object):
             for j in range(self.Nrep):
                 for k in range(self.Nrep):
                     yield self[i, j, k]
+
+def QSOBiasModel(config):
+    """ returns a function evaluating QSO bias
+        at given R
+
+        current file is copied from 
+    """
+    string = """
+       0.24   1.41   0.18
+       0.49   1.38   0.06
+       0.80   1.45   0.38
+       1.03   1.83   0.03
+       1.23   2.37   0.25
+       1.41   1.92   0.50
+       1.58   2.42   0.40
+       1.74   2.79   0.47
+       1.92   3.62   0.49
+       2.10   2.99   1.42
+       2.40   4      5
+       3.20   6      2
+       4.0    10.5     3
+    """
+    if config.QSOBiasInput is None:
+        z, bias, err = numpy.fromstring(string, sep=' ').reshape(-1, 3).T
+    else:
+        z, bias, err = numpy.loadtxt(config.QSOBiasInput, unpack=True)
+    a = 1 / (z + 1.)
+    R = config.cosmology.Dc(a) * config.DH
+    spl = UnivariateSpline(R, bias, 1 / err)
+    return spl 
+
+def QSODensityModel(config):
+    """ returns a function evaluating 
+        Survey QSO number density at given R
+        This will be adjusted by the sky mask
+
+        the input surveydensityfile, constains
+        two npy arrays, 
+        z
+        specdensity, dN / dz where N is number QSOs
+
+        The default is to use the SDSS DR9 count.
+    """
+    string = """
+0.0 34.0985107917 0.2 959.763566767 0.4 6605.80243392 0.6 32523.7675186
+0.8 72691.414628 1.0 26855.6444122 1.2 11530.0423145 1.4 12669.611195
+1.6 25099.5717001 1.8 22712.9437337 2.0 35654.3477467 2.2 153115.318974
+2.4 178890.569673 2.6 115889.244553 2.8 69022.9874509 3.0 56040.3877876
+3.2 41957.1799842 3.4 18310.9661606 3.6 11673.2289537 3.8 9949.67508789
+4.0 5060.53773401 4.2 2350.06892613 4.4 1150.65036452 4.6 767.760735547
+4.8 603.559006041 5.0 266.067138644 5.2 108.856505818 5.4 18.8484273619
+5.6 5.94102761023 5.8 4.30473603211 6.0 0.662939420386 
+"""
+    skymask = Skymask(config)
+    if config.QSODensityInput is None:
+        z, specdensity = numpy.fromstring(string, sep=' ').reshape(-1, 2).T
+    else:
+        z, specdensity = numpy.loadtxt(config.QSODensityInput, unpack=True)
+        
+    # adjust for sky 
+    specdensity = specdensity / skymask.fraction
+
+    # now lets convert it to number density per comoving volume
+    a = 1 / (z + 1)
+    R = config.cosmology.Dc(a) * config.DH
+    # dN/dV = 1 / 4piR^2 dN/dR
+    # dN/dR = dN/dz * dz/da * da/dR
+    density = specdensity * (- a ** -2) * \
+    config.cosmology.aback(R / config.DH, nu=1) / config.DH / (4 * numpy.pi * R ** 2)
+
+    # fix it at z=0.
+    density[0] = 0
+    return interp1d(R, density, bounds_error=False, fill_value=0.0)
+
+try:
+    import chealpy
+except ImportError:
+    chealpy = None
+    print "chealpy is not installed, skymask is disabled"
+
+class Skymask(object):
+    """ sky mask in mango healpix format """
+    def __init__(self, config):
+        if config.SkymaskInput is not None:
+            self.Nside = 2
+            self.fraction = 1.0
+            self.mask = numpy.ones(48)
+        else:
+            if chealpy is None:
+                raise Exception("Skymask is provided yet chealpy is not installed")
+            skymask = numpy.loadtxt(config.SkymaskInput, skiprows=1)
+            Nside = chealpy.npix2nside(len(skymask))
+            print 'using healpix sky mask Nside', Nside
+            self.Nside = Nside
+            self.fraction = skymask.sum() / len(skymask)
+            self.mask = skymask
+
+    def __call__(self, xyz):
+        """ look up the sky mask from xyz vectors
+            xyz is row vectors [..., 3] """
+        if chealpy is None:
+            # it is guarranted config.SkymaskInput is None
+            return numpy.ones(shape=xyz.shape[0])
+        else:
+            ipix = chealpy.vec2pix_nest(self.Nside, xyz)
+            #Nside, 0.5 * numpy.pi - dec, ra)
+            return self.mask[ipix]
+
 def PowerSpectrum(A):
-    power = A.PowerSpectrum
+    power = A.PowerSpectrumCache
     try:
         k, p = numpy.loadtxt(power, unpack=True)
         print 'using power from file ', power
@@ -438,6 +333,262 @@ def VarFractionModel(config):
     def func(a):
         return A * (1 / a / Z) ** B * mfm(a) ** 2
     return func
+
+class FGPAmodel(object):
+    # turns out Af is exp(u * a + v), 
+    # and Bf is u * a **2 + v * a + w.
+    # thus we use polyfit in FGPAmodel
+    def __init__(self, config):
+        f = numpy.load(config.MatchMeanFractionOutput)
+        a = f['a']
+        Af = f['Af']
+        Bf = f['Bf']
+        arg = a.argsort()
+        Af = Af[arg]
+        Bf = Bf[arg]
+        a = a[arg]
+        # reject bad fits
+        mask = (Af > 0)
+        # skip the first bin because it
+        # can be very much off (due to small sample size).
+        self.a = a[mask][1:]
+        self.Af = Af[mask][1:]
+        self.Bf= Bf[mask][1:]
+        
+    @Lazy
+    def Afunc(self):
+        pol = numpy.polyfit(self.a, numpy.log(self.Af), 1)
+        def func(a):
+            return numpy.exp(numpy.polyval(pol, a))
+        return func
+    @Lazy
+    def Bfunc(self):
+        pol = numpy.polyfit(self.a, self.Bf, 2)
+        def func(a):
+            return numpy.polyval(pol, a)
+        return func
+
+
+class Sightlines(object):
+    dtype =numpy.dtype([('RA', 'f8'), 
+                             ('DEC', 'f8'), 
+                             ('Z_RED', 'f8'),
+                             ('Z_REAL', 'f8'),
+                             ])
+
+    def __init__(self, config, LogLamMin=None, LogLamMax=None):
+        """ create a sightline catelogue.
+
+            if LogLamMin and LogLamMax are given,
+            each sightline is chopped at these wave lengths.
+
+            otherwise the lines will cover from 1026 to 1216.   
+        """
+
+        self.data = numpy.fromfile(config.QSOCatelog, 
+                dtype=Sightlines.dtype)
+        self.Z_REAL = self.data['Z_REAL']
+        self.DEC = self.data['DEC']
+        self.RA = self.data['RA']
+        self.config = config
+        self.LogLamMin = numpy.log10((self.Z_REAL + 1) * 1026.)
+        if LogLamMin is not None:
+            self.LogLamMin = numpy.maximum(LogLamMin, self.LogLamMin)
+
+        self.LogLamMax = numpy.log10((self.Z_REAL + 1) * 1216.)
+        if LogLamMax is not None:
+            self.LogLamMax = numpy.minimum(LogLamMax, self.LogLamMax)
+
+        # Z_RED is writable!
+        data2 = numpy.memmap(config.QSOCatelog, dtype=Sightlines.dtype, mode='r+')
+        self.Z_RED = data2['Z_RED']
+
+    def __len__(self):
+        return len(self.data)
+
+    @Lazy
+    def ActiveSampleStart(self):
+        """ the sample layout is decided from LambdaMin / LambdaMax;
+            this is a safe offset rel to SampleOffset,
+            and with added padding so that thermal convolution is safe.
+        """
+        cosmology = self.config.cosmology
+        a1 = 1216.0 / 10 ** self.LogLamMin 
+        R1 = cosmology.Dc(a1) * self.config.DH
+        R1full = self.R1
+        rel = numpy.int32((R1 - R1full - 4000) // self.config.LogNormalScale)
+        rel[rel < 0] = 0
+        big = rel > self.Nsamples
+        rel[big] = self.Nsamples[big]
+        return rel
+
+    @Lazy
+    def ActiveSampleEnd(self):
+        cosmology = self.config.cosmology
+        a2 = 1216.0 / 10 ** self.LogLamMax
+        R2 = cosmology.Dc(a2) * self.config.DH
+        R1full = self.R1
+        rel = numpy.int32((R2 - R1full + 4000) // self.config.LogNormalScale)
+        rel[rel < 0] = 0
+        big = rel > self.Nsamples
+        rel[big] = self.Nsamples[big]
+        return rel
+
+    @Lazy
+    def SampleOffset(self):
+        """ the full sample layout is decided from Z_REAL used by gaussian"""
+        rt = numpy.empty(len(self), dtype='intp')
+        rt[0] = 0
+        rt[1:] = numpy.cumsum(self.Nsamples)[:-1]
+        return rt
+
+    @Lazy
+    def R1(self):
+        """ to get the Dc grid in Kpc/h units, use 
+            R1 + arange(Nsamples) * config.LogNormalScale
+        """
+        cosmology = self.config.cosmology
+        a1 = 1216. / (1026. * (self.Z_REAL + 1))
+        R1 = cosmology.Dc(a1) * self.config.DH
+        return R1
+
+    @Lazy
+    def R2(self):
+        cosmology = self.config.cosmology
+        a2 = 1. / (self.Z_REAL + 1)
+        R2 = cosmology.Dc(a2) * self.config.DH
+        return R2
+
+    @Lazy
+    def Nsamples(self):
+        cosmology = self.config.cosmology
+        return numpy.int32((self.R2 - self.R1) / self.config.LogNormalScale)
+
+    @Lazy
+    def x1(self):
+        cosmology = self.config.cosmology
+        return self.dir * self.R1[:, None]
+
+    @Lazy
+    def x2(self):
+        cosmology = self.config.cosmology
+        return self.dir * self.R2[:, None]
+
+    @Lazy
+    def dir(self):
+        dir = numpy.empty((len(self), 3))
+        dir[:, 0] = numpy.cos(self.RA) * numpy.cos(self.DEC)
+        dir[:, 1] = numpy.sin(self.RA) * numpy.cos(self.DEC)
+        dir[:, 2] = numpy.sin(self.DEC)
+        return dir
+
+    @Lazy
+    def LogLamGridIndMin(self):
+        rt = numpy.searchsorted(self.config.LogLamGrid, 
+                    self.LogLamMin, side='right')
+        return rt
+    @Lazy
+    def LogLamGridIndMax(self):
+        rt = numpy.searchsorted(self.config.LogLamGrid, 
+                    self.LogLamMax, side='left')
+        # probably no need to care if it goes out of limit. 
+        # really should have used 1e-4 binning than the search but
+        # need to deal with the clipping later on.
+        # Max is exclusive!
+        # AKA the right edge of the last loglam bin is at Max - 1
+        # in config.LogLamGrid
+        toosmall = rt <= self.LogLamGridIndMin
+        rt[toosmall] = self.LogLamGridIndMin[toosmall] + 1
+        return rt
+
+    @Lazy
+    def Npixels(self):
+        # This is always 1 smaller than the number of Bins edges. 
+        return self.LogLamGridIndMax - self.LogLamGridIndMin - 1
+
+    def GetPixelLogLamBins(self, i):
+        sl = slice(self.LogLamGridIndMin[i], self.LogLamGridIndMax[i])
+        bins = self.config.LogLamGrid[sl]
+        assert len(bins) == self.Npixels[i] + 1
+        return bins
+
+    def GetPixelLogLamCenter(self, i):
+        bins = self.GetPixelLogLamBins(i)
+        return 0.5 * (bins[1:] + bins[:-1])
+
+    @Lazy
+    def PixelOffset(self):
+        rt = numpy.empty(len(self), dtype='intp')
+        rt[0] = 0
+        rt[1:] = numpy.cumsum(self.Npixels)[:-1]
+        return rt
+
+class SpectraOutput(object):
+    def __init__(self, config):
+        self.config = config
+        sightlines = Sightlines(config)
+        class Accessor(object):
+            def __init__(self, data):
+                self.data = data
+            def __getitem__(self, index):
+                sl = slice(
+                    sightlines.PixelOffset[index],
+                    sightlines.PixelOffset[index] + 
+                    sightlines.Npixels[index])
+                return self.data[sl] 
+        self.Accessor = Accessor
+        class Faker(object):
+            def __init__(self, table):
+                self.table = table
+            def __getitem__(self, index):
+                """ table is the central value, IndMax refers to the last edge.
+                    hence needs to take one away from IndMax
+                """
+                sl = slice(
+                sightlines.LogLamGridIndMin[index],
+                sightlines.LogLamGridIndMax[index] - 1)
+                return self.table[sl]
+        self.Faker = Faker
+        self.sightlines = sightlines
+    def __len__(self):
+        return len(self.sightlines)
+    @Lazy
+    def taured(self):
+        taured = numpy.memmap(self.config.SpectraOutputTauRed, mode='r+', dtype='f4')
+        return self.Accessor(taured) 
+        
+    @Lazy
+    def taureal(self):
+        taureal = numpy.memmap(self.config.SpectraOutputTauReal, mode='r+', dtype='f4')
+        return self.Accessor(taureal) 
+
+    @Lazy
+    def delta(self):
+        delta = numpy.memmap(self.config.SpectraOutputDelta, mode='r+', dtype='f4')
+        return self.Accessor(delta)
+
+    @Lazy
+    def LogLam(self):
+        LogLamGrid = self.config.LogLamGrid
+        LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
+        return self.Faker(LogLamCenter)
+
+    @Lazy
+    def z(self):
+        LogLamGrid = self.config.LogLamGrid
+        LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
+        z = 10 ** LogLamCenter / 1216.0 - 1
+        return self.Faker(z)
+        
+    @Lazy
+    def Dc(self):
+        LogLamGrid = self.config.LogLamGrid
+        LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
+        z = 10 ** LogLamCenter / 1216.0 - 1
+        a = 1 / (z + 1)
+        Dc = self.config.cosmology.Dc(a) * self.config.DH
+        return self.Faker(Dc)
+
 
 if __name__ == '__main__':
     from sys import argv

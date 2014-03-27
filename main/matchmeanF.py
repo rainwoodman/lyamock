@@ -4,48 +4,14 @@ from scipy.optimize import brentq, root
 from scipy.integrate import romberg
 
 from common import Config
-from lib.lazy import Lazy
-from lib.chunkmap import chunkmap
 from common import MeanFractionModel
 from common import VarFractionModel
-from sightlines import Sightlines
+from common import Sightlines
+
+from lib.lazy import Lazy
+from lib.chunkmap import chunkmap
+
 from spectra import SpectraMaker
-
-# turns out Af is exp(u * a + v), 
-# and Bf is u * a **2 + v * a + w.
-# thus we use polyfit in FGPAmodel
-from numpy import polyfit, polyval
-
-class FGPAmodel(object):
-    def __init__(self, config):
-        f = numpy.load(config.MatchMeanFractionOutput)
-        a = f['a']
-        Af = f['Af']
-        Bf = f['Bf']
-        arg = a.argsort()
-        Af = Af[arg]
-        Bf = Bf[arg]
-        a = a[arg]
-        # reject bad fits
-        mask = (Af > 0)
-        # skip the first bin because it
-        # can be very much off (due to small sample size).
-        self.a = a[mask][1:]
-        self.Af = Af[mask][1:]
-        self.Bf= Bf[mask][1:]
-        
-    @Lazy
-    def Afunc(self):
-        pol = polyfit(self.a, numpy.log(self.Af), 1)
-        def func(a):
-            return numpy.exp(polyval(pol, a))
-        return func
-    @Lazy
-    def Bfunc(self):
-        pol = polyfit(self.a, self.Bf, 2)
-        def func(a):
-            return polyval(pol, a)
-        return func
 
 def main(A):
     """ match the mean fraction by fixing prefactor A(a) and B(a) on tau

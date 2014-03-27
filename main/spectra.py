@@ -1,78 +1,14 @@
 import numpy
 
 from common import Config
-from sightlines import Sightlines
+from common import Sightlines
+from common import FGPAmodel
 from lib.lazy import Lazy
 from lib.interp1d import  interp1d
 from lib.irconvolve import irconvolve
 from lib.splat import splat
 from lib.chunkmap import chunkmap
 
-class SpectraOutput(object):
-    def __init__(self, config):
-        self.config = config
-        sightlines = Sightlines(config)
-        class Accessor(object):
-            def __init__(self, data):
-                self.data = data
-            def __getitem__(self, index):
-                sl = slice(
-                    sightlines.PixelOffset[index],
-                    sightlines.PixelOffset[index] + 
-                    sightlines.Npixels[index])
-                return self.data[sl] 
-        self.Accessor = Accessor
-        class Faker(object):
-            def __init__(self, table):
-                self.table = table
-            def __getitem__(self, index):
-                """ table is the central value, IndMax refers to the last edge.
-                    hence needs to take one away from IndMax
-                """
-                sl = slice(
-                sightlines.LogLamGridIndMin[index],
-                sightlines.LogLamGridIndMax[index] - 1)
-                return self.table[sl]
-        self.Faker = Faker
-        self.sightlines = sightlines
-    def __len__(self):
-        return len(self.sightlines)
-    @Lazy
-    def taured(self):
-        taured = numpy.memmap(self.config.SpectraOutputTauRed, mode='r+', dtype='f4')
-        return self.Accessor(taured) 
-        
-    @Lazy
-    def taureal(self):
-        taureal = numpy.memmap(self.config.SpectraOutputTauReal, mode='r+', dtype='f4')
-        return self.Accessor(taureal) 
-
-    @Lazy
-    def delta(self):
-        delta = numpy.memmap(self.config.SpectraOutputDelta, mode='r+', dtype='f4')
-        return self.Accessor(delta)
-
-    @Lazy
-    def LogLam(self):
-        LogLamGrid = self.config.LogLamGrid
-        LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
-        return self.Faker(LogLamCenter)
-
-    @Lazy
-    def z(self):
-        LogLamGrid = self.config.LogLamGrid
-        LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
-        z = 10 ** LogLamCenter / 1216.0 - 1
-        return self.Faker(z)
-        
-    @Lazy
-    def Dc(self):
-        LogLamGrid = self.config.LogLamGrid
-        LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
-        z = 10 ** LogLamCenter / 1216.0 - 1
-        a = 1 / (z + 1)
-        Dc = self.config.cosmology.Dc(a) * self.config.DH
-        return self.Faker(Dc)
 
 class SpectraMaker(object):
     def __init__(self, config, sightlines):
@@ -211,8 +147,6 @@ class SpectraMaker(object):
 def main(A):
     """convolve the tau(mass) field, 
     add in thermal broadening and redshift distortion """
-
-    from matchmeanF import FGPAmodel
 
     sightlines = Sightlines(A)
     maker = SpectraMaker(A, sightlines)
