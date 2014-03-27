@@ -1,16 +1,17 @@
 import numpy
-from kdcount import correlate
-import chealpy
-from scipy.stats import kde
 import sharedmem
-from sys import stdout
 
-from args import sightlinedtype
+from common import Config
+from main.sightlines import Sightlines
+from kdcount import correlate
+from scipy.stats import kde
+from sys import stdout
 
 def getrandom(A):
     NR = 800000
 #    R = numpy.random.uniform(size=(NR, 3)) * D.ptp(axis=0)[None, :] \
 #            + D.min(axis=0)[None, :]
+    sightlines = Sightlines(A)
     realradius = numpy.fromfile(A.datadir + '/QSOcatelog.raw',
             dtype=sightlinedtype)['R']
     R = numpy.empty(NR, ('f4', 3))
@@ -65,3 +66,8 @@ def main(A):
     ax.legend()
     canvas = FigureCanvasAgg(figure)
     figure.savefig('quasar-corr.svg')
+
+
+if __name__ == '__main__':
+    from sys import argv
+    main(Config(argv[1]))
