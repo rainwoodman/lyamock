@@ -7,7 +7,7 @@ from common import MeanFractionModel
 from common import VarFractionModel
 from sightlines import Sightlines
 
-from convolve import SpectraOutput
+from spectra import SpectraOutput
 
 def main(A):
     sightlines = Sightlines(A)

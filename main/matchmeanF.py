@@ -9,7 +9,7 @@ from lib.chunkmap import chunkmap
 from common import MeanFractionModel
 from common import VarFractionModel
 from sightlines import Sightlines
-from convolve import SpectraMaker
+from spectra import SpectraMaker
 
 # turns out Af is exp(u * a + v), 
 # and Bf is u * a **2 + v * a + w.
