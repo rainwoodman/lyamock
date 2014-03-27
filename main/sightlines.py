@@ -58,7 +58,7 @@ class Sightlines(object):
         a1 = 1216.0 / 10 ** self.LogLamMin 
         R1 = cosmology.Dc(a1) * self.config.DH
         R1full = self.R1
-        rel = numpy.int32((R1 - R1full - 1000) // self.config.LogNormalScale)
+        rel = numpy.int32((R1 - R1full - 4000) // self.config.LogNormalScale)
         rel[rel < 0] = 0
         big = rel > self.Nsamples
         rel[big] = self.Nsamples[big]
@@ -70,7 +70,7 @@ class Sightlines(object):
         a2 = 1216.0 / 10 ** self.LogLamMax
         R2 = cosmology.Dc(a2) * self.config.DH
         R1full = self.R1
-        rel = numpy.int32((R2 - R1full + 1000) // self.config.LogNormalScale)
+        rel = numpy.int32((R2 - R1full + 4000) // self.config.LogNormalScale)
         rel[rel < 0] = 0
         big = rel > self.Nsamples
         rel[big] = self.Nsamples[big]

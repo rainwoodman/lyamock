@@ -4,8 +4,8 @@ fibers=DR10Q_alpha_short_v3.dat
 
 [IC]
 Zmin = 2.0
-Zmax = 3.0
-NmeshCoarse = 32
+Zmax = 4.0
+NmeshCoarse = 64
 NmeshEff = 1024
 NRep = 4
 Seed = 100
@@ -22,9 +22,9 @@ h = 0.72
 skymaskfile = boss_survey.hpw
 
 [FGPA]
-LogNormalScale = 200
+LogNormalScale = 250
 Lambda0 = 3069.0
-QSOScale = 40000
+QSOScale = 10000
 IGMTemperature = 1e4
 beta = 1.58
 

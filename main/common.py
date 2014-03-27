@@ -183,6 +183,11 @@ LogNormalScale) + 1))
                     "MatchMeanFractionOutput")
         except ConfigParser.NoOptionError:
             MatchMeanFractionOutput = datadir + '/matchmeanFoutput.npz'
+        try:
+            MeasureMeanFractionOutput = config.get("Cosmology", 
+                    "MeasureMeanFractionOutput")
+        except ConfigParser.NoOptionError:
+            MeasureMeanFractionOutput = datadir + '/measuremeanFoutput.npz'
 
         try:
             SpectraOutputTauRed = config.get("Cosmology", "SpectraOutputTauRed")
@@ -201,6 +206,7 @@ LogNormalScale) + 1))
 
         self.export(locals(), [
                 'MatchMeanFractionOutput',
+                'MeasureMeanFractionOutput',
                 'SpectraOutputTauRed',
                 'SpectraOutputTauReal',
                 'SpectraOutputDelta',

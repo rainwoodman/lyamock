@@ -1,5 +1,4 @@
 import numpy
-import sharedmem
 
 from common import Config
 from sightlines import Sightlines
@@ -7,6 +6,7 @@ from lib.lazy import Lazy
 from lib.interp1d import  interp1d
 from lib.irconvolve import irconvolve
 from lib.splat import splat
+from lib.chunkmap import chunkmap
 
 class SpectraOutput(object):
     def __init__(self, config):
@@ -26,9 +26,12 @@ class SpectraOutput(object):
             def __init__(self, table):
                 self.table = table
             def __getitem__(self, index):
+                """ table is the central value, IndMax refers to the last edge.
+                    hence needs to take one away from IndMax
+                """
                 sl = slice(
                 sightlines.LogLamGridIndMin[index],
-                sightlines.LogLamGridIndMax[index])
+                sightlines.LogLamGridIndMax[index] - 1)
                 return self.table[sl]
         self.Faker = Faker
         self.sightlines = sightlines
@@ -116,7 +119,7 @@ class SpectraMaker(object):
         deltaLN = numpy.exp(Dfactor * delta - (Dfactor ** 2 * var) * 0.5)
         return dreal, a, deltaLN, Dfactor
 
-    def convolve(self, i, Afunc, Bfunc, withrsd=False):
+    def convolve(self, i, Afunc, Bfunc, returns=['taured', 'taureal', 'delta', 'Zqso']):
         """
             convolve the ith sightline, with Afunc(a) and Bfunc(a)
             for the A B factors,
@@ -128,6 +131,7 @@ class SpectraMaker(object):
                in addition returns the taured and rsd Z_qso of the sightline.
                (tuple of 4)
         """
+        rt = lambda : None
         # from Rupert
         # 0.12849 = sqrt( 2 KBT / Mproton) in km/s
         # He didn't have 0.5 in the kernel.
@@ -163,32 +167,43 @@ class SpectraMaker(object):
         loglam = numpy.log10(1216.0 / a)
         LogLamGrid = sightlines.GetPixelLogLamBins(i)
 
-        taureal_pix = splat(loglam, taureal, LogLamGrid)
-        w = splat(loglam, 1.0, LogLamGrid) - 1
-        w[w == 0] = 1.0
-        delta_pix = splat(loglam, 1 + delta, LogLamGrid) / w
+        T = config.IGMTemperature * (1 + deltaLN) ** (5. / 3. - 1)
+        vtherm = SQRT_KELVIN_TO_KMS * T ** 0.5
+        dtherm = vtherm / config.C / (a * Ea(a))
 
-        rt = [taureal_pix[1:-1], delta_pix[1:-1]]
+        if 'taureal' in returns:
+            # thermal broadening in real space 
+            taureal_th  = numpy.float32(irconvolve(dreal, dreal, taureal,
+                    dtherm))
+            taureal_pix = splat(loglam, taureal_th, LogLamGrid)
 
-        if withrsd:
-            # thermal broadening
-            T = config.IGMTemperature * (1 + deltaLN) ** (5. / 3. - 1)
-            vtherm = SQRT_KELVIN_TO_KMS * T ** 0.5
-            dtherm = vtherm / config.C / (a * Ea(a))
+            rt.taureal = taureal_pix[1:-1]
+
+        if 'delta' in returns:
+            w = splat(loglam, 1.0, LogLamGrid) - 1
+            w[w == 0] = 1.0
+            delta_pix = splat(loglam, 1 + delta, LogLamGrid) / w
+            rt.delta = delta_pix[1:-1]
+
+        if 'taured' in returns:
             # rsd is also in Hubble distance units
             rsd = losdisp * FOmega(a) * Dfactor / config.DH
             dred = dreal + rsd
+            # thermal broadening in redshift space
             taured = numpy.float32(irconvolve(dreal, dred, taureal,
                 dtherm))
             assert not numpy.isnan(taured).any()
 
             taured_pix = splat(loglam, taured, LogLamGrid)
+            rt.taured = taured_pix[1:-1]
+
+        if 'Zqso' in returns:
             # redshift distort the quasar position 
             Zqso = sightlines.Z_REAL[i]
             dqso = Dc(1 / (Zqso + 1.0))
             dqso = dqso + numpy.interp(dqso, dreal, rsd)
             Zqso = 1.0 / Dc.inv(dqso) - 1
-            rt.extend([taured_pix[1:-1], Zqso])
+            rt.Zqso = Zqso
 
         return rt
 
@@ -212,20 +227,15 @@ def main(A):
     specdelta = numpy.memmap(A.SpectraOutputDelta, mode='w+', 
             dtype='f4', shape=Npixels)
 
-    with sharedmem.MapReduce() as pool:
-        def work(i):
-            sl2 = slice(sightlines.PixelOffset[i], 
-                    sightlines.PixelOffset[i] + sightlines.Npixels[i])
-            taureal_pix, delta_pix, taured_pix, Z_red = \
-                    maker.convolve(i, withrsd=True,
-                            Afunc=fgpa.Afunc, Bfunc=fgpa.Bfunc
-                    )
-            spectaureal[sl2] = taureal_pix
-            spectaured[sl2] = taured_pix
-            specdelta[sl2] = delta_pix
-            sightlines.Z_RED[i] = Z_red
-
-        pool.map(work, range(len(sightlines)))
+    def work(i):
+        sl2 = slice(sightlines.PixelOffset[i], 
+                sightlines.PixelOffset[i] + sightlines.Npixels[i])
+        result =  maker.convolve(i, Afunc=fgpa.Afunc, Bfunc=fgpa.Bfunc)
+        spectaureal[sl2] = result.taureal
+        spectaured[sl2] = result.taured
+        specdelta[sl2] = result.delta
+        sightlines.Z_RED[i] = result.Zqso
+    chunkmap(work, range(len(sightlines)), 100)
 
     spectaureal.flush()
     spectaured.flush()

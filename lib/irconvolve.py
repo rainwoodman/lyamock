@@ -18,40 +18,41 @@ def irconvolve(xc, x, y, h,
     y = y[good]
     h = h[good]
 
-    out = numpy.zeros(shape=xc.shape, dtype=y.dtype)
+    if len(h) > 0:
+        # the real buffer is bigger than out to ease the normalization
+        # still on the edge we are imperfect
+        padding = int((2 * support + 1)* h.max() / dxc) + 1
+        padding = max(padding, 2)
+        buffer = numpy.zeros(shape=len(xc) + 2 * padding)
+        paddedxc = numpy.empty(buffer.shape, dtype=xc.dtype)
+        paddedxc[padding:-padding] = xc
+        # here comes the requirement xc has to be uniform.
+        paddedxc[:padding] = xc[0] - numpy.arange(padding, 0, -1) * dxc
+        paddedxc[-padding:] = xc[-1] + numpy.arange(1, padding +1) * dxc
+        out = buffer[padding:-padding]
+        assert len(out) == len(xc)
+        assert (paddedxc[1:] > paddedxc[:-1]).all()
 
-    # the real buffer is bigger than out to ease the normalization
-    # still on the edge we are imperfect
-    padding = int((2 * support + 1)* h.max() / dxc) + 1
-    padding = max(padding, 2)
-    buffer = numpy.zeros(shape=len(xc) + 2 * padding)
-    paddedxc = numpy.empty(buffer.shape, dtype=xc.dtype)
-    paddedxc[padding:-padding] = xc
-    # here comes the requirement xc has to be uniform.
-    paddedxc[:padding] = xc[0] - numpy.arange(padding, 0, -1) * dxc
-    paddedxc[-padding:] = xc[-1] + numpy.arange(1, padding +1) * dxc
-    out = buffer[padding:-padding]
-    assert len(out) == len(xc)
-    assert (paddedxc[1:] > paddedxc[:-1]).all()
+        # slow. for uniform xc/paddedxc, we can do this faster than search
+        start = paddedxc.searchsorted(x - support * h, side='left')
+        end = paddedxc.searchsorted(x + support * h, side='left')
 
-    # slow. for uniform xc/paddedxc, we can do this faster than search
-    start = paddedxc.searchsorted(x - support * h, side='left')
-    end = paddedxc.searchsorted(x + support * h, side='left')
-
-    # tricky part, build the csr matrix for the conv operator,
-    # only for the non-zero elements (block diagonal)
-    N = end - start + 1
-    indptr = numpy.concatenate(([0], N.cumsum()))
-    indices = numpy.repeat(start - indptr[:-1], N) + numpy.arange(N.sum())
-    r = numpy.repeat(x, N) - paddedxc[indices]
-    data = kernel(r, numpy.repeat(h, N))
-    data[numpy.repeat(N==1, N)] = 1
-    data[numpy.repeat(h==0, N)] = 1
-    matrix = csr.csr_matrix((data, indices, indptr), 
-            shape=(len(x), len(paddedxc)))
-    norm = numpy.repeat(matrix.sum(axis=1).flat, N)
-    data /= norm
-    buffer[:] = matrix.transpose() * y
+        # tricky part, build the csr matrix for the conv operator,
+        # only for the non-zero elements (block diagonal)
+        N = end - start + 1
+        indptr = numpy.concatenate(([0], N.cumsum()))
+        indices = numpy.repeat(start - indptr[:-1], N) + numpy.arange(N.sum())
+        r = numpy.repeat(x, N) - paddedxc[indices]
+        data = kernel(r, numpy.repeat(h, N))
+        data[numpy.repeat(N==1, N)] = 1
+        data[numpy.repeat(h==0, N)] = 1
+        matrix = csr.csr_matrix((data, indices, indptr), 
+                shape=(len(x), len(paddedxc)))
+        norm = numpy.repeat(matrix.sum(axis=1).flat, N)
+        data /= norm
+        buffer[:] = matrix.transpose() * y
+    else:
+        out = numpy.zeros(shape=xc.shape, dtype=y.dtype)
     return out
 
 def test():
