@@ -22,34 +22,6 @@ bitmapdtype = numpy.dtype([
     ('pos', ('f4', 3)), 
     ])
 
-"""
-    parser = argparse.ArgumentParser(description="")
-    parser.add_argument("paramfile", 
-               help="the paramfile")
-
-    parser.add_argument("command", choices=[
-       'sightlines',
-       'gaussian',
-       'convolve', 
-       'matchmeanF',
-       'makespectra',
-       # above is the pipiline
-       'measuremeanF',
-       'export',
-       'exportross',
-       'check',
-       # below are (cross)correlation
-       'qsocorr',
-       'qsocorr2d',
-       'pixelcorr',
-       'pixelcorr2d',
-       'crosscorr2d',
-       'corrbootstrap',
-       'fit', # will just use the cosmology need to move this thing out
-       'testdist',
-       ])
-"""
-
 class Config(object):
     def export(self, dict, names):
         for name in names:
