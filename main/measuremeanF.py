@@ -24,7 +24,7 @@ def main(A):
         loglam[sl] = spectra.LogLam[i]
     chunkmap(work, range(len(sightlines)), chunksize=100)
 
-    Nbins = 8
+    Nbins = 400
     zBins = numpy.linspace(2.0, 4.0, Nbins + 1, endpoint=True)
     LogLamBins = numpy.log10(1216.0 * (1 + zBins ))
     z = 0.5 * (zBins[1:] + zBins[:-1])
@@ -50,8 +50,8 @@ def main(A):
     print z
     print meanF
     print varF
-    numpy.savez(A.MeasureMeanFractionOutput, 
-            a=1/(1+z), xmeanF=meanF, xvarF=varF, 
+    numpy.savez(A.MeasuredMeanFractionOutput, 
+            a=1/(1+z), abins=1/(1+zBins), xmeanF=meanF, xvarF=varF, 
             xmeanFreal=meanFreal,
             xvarFreal=varFreal)
 

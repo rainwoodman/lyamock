@@ -116,9 +116,9 @@ class SpectraMaker(object):
             rt.taureal = taureal_pix[1:-1]
 
         if 'delta' in returns:
-            w = splat(loglam, 1.0, LogLamGrid) - 1
+            w = splat(loglam, 1.0, LogLamGrid)
             w[w == 0] = 1.0
-            delta_pix = splat(loglam, 1 + delta, LogLamGrid) / w
+            delta_pix = splat(loglam, 1 + delta, LogLamGrid) / w - 1
             rt.delta = delta_pix[1:-1]
 
         if 'taured' in returns:

@@ -110,7 +110,7 @@ class Config(object):
         export("Output", "ObjectIDField", default=jn('ObjectIDField.raw'))
         export("Output", "VelField", default=jn('VelField.raw'))
         export("Output", "MatchMeanFractionOutput", default=jn('MatchMeanFractionOutput.npz'))
-        export("Output", "MeasureMeanFractionOutput", default=jn('MeasureMeanFractionOutput.npz'))
+        export("Output", "MeasuredMeanFractionOutput", default=jn('MeasuredMeanFractionOutput.npz'))
         export("Output", "SpectraOutputTauRed", default=jn('SpectraOutputTauRed.raw'))
         export("Output", "SpectraOutputTauReal", default=jn('SpectraOutputTauReal.raw'))
         export("Output", "SpectraOutputDelta", default=jn('SpectraOutputDelta.raw'))
@@ -334,6 +334,19 @@ def VarFractionModel(config):
         return A * (1 / a / Z) ** B * mfm(a) ** 2
     return func
 
+def MeanFractionMeasured(config, real=False):
+    f = numpy.load(config.MeasuredMeanFractionOutput)
+    ameanFbins = f['abins']
+    if real:
+        meanF = f['xmeanFreal']
+    else:
+        meanF = f['xmeanF']
+    def func(a):
+        dig = numpy.digitize(a, ameanFbins).clip(0, len(ameanFbins) - 2)
+        return meanF[dig]
+
+    return func
+
 class FGPAmodel(object):
     # turns out Af is exp(u * a + v), 
     # and Bf is u * a **2 + v * a + w.
@@ -405,6 +418,13 @@ class Sightlines(object):
 
     def __len__(self):
         return len(self.data)
+
+    @Lazy
+    def R(self):
+        cosmology = self.config.cosmology
+        a2 = 1. / (self.Z_RED + 1)
+        R2 = cosmology.Dc(a2) * self.config.DH
+        return R2
 
     @Lazy
     def ActiveSampleStart(self):
@@ -528,14 +548,17 @@ class SpectraOutput(object):
         self.config = config
         sightlines = Sightlines(config)
         class Accessor(object):
-            def __init__(self, data):
-                self.data = data
-            def __getitem__(self, index):
+            @staticmethod
+            def getslice(index):
                 sl = slice(
                     sightlines.PixelOffset[index],
                     sightlines.PixelOffset[index] + 
                     sightlines.Npixels[index])
-                return self.data[sl] 
+                return sl
+            def __init__(self, data):
+                self.data = data
+            def __getitem__(self, index):
+                return self.data[self.getslice(index)] 
         self.Accessor = Accessor
         class Faker(object):
             def __init__(self, table):
@@ -574,20 +597,40 @@ class SpectraOutput(object):
         return self.Faker(LogLamCenter)
 
     @Lazy
+    def Lam(self):
+        LogLamGrid = self.config.LogLamGrid
+        LamCenter = 10 ** (0.5 * (LogLamGrid[1:] + LogLamGrid[:-1]))
+        return self.Faker(LamCenter)
+
+    @Lazy
     def z(self):
         LogLamGrid = self.config.LogLamGrid
         LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
         z = 10 ** LogLamCenter / 1216.0 - 1
         return self.Faker(z)
+
+    @Lazy
+    def a(self):
+        LogLamGrid = self.config.LogLamGrid
+        LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
+        a = 1216.0 / 10 ** LogLamCenter
+        return self.Faker(a)
         
     @Lazy
-    def Dc(self):
+    def R(self):
         LogLamGrid = self.config.LogLamGrid
         LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
         z = 10 ** LogLamCenter / 1216.0 - 1
         a = 1 / (z + 1)
         Dc = self.config.cosmology.Dc(a) * self.config.DH
         return self.Faker(Dc)
+
+    def position(self, i):
+        """ returns a vector of the positions of pixels in the spectra """
+        return self.R[i][:, None] * self.sightlines.dir[i][None, :]
+
+    def RfLam(self, i):
+        return self.Lam[i] / (1 + self.sightlines.Z_RED[i])
 
 
 if __name__ == '__main__':

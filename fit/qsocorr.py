@@ -1,49 +1,50 @@
 import numpy
 import sharedmem
-
-from common import Config
-from main.sightlines import Sightlines
+import os.path
 from kdcount import correlate
 from scipy.stats import kde
 from sys import stdout
+
+from common import Config
+from common import Sightlines
+from common import Skymask
+
 
 def getrandom(A):
     NR = 800000
 #    R = numpy.random.uniform(size=(NR, 3)) * D.ptp(axis=0)[None, :] \
 #            + D.min(axis=0)[None, :]
     sightlines = Sightlines(A)
-    realradius = numpy.fromfile(A.datadir + '/QSOcatelog.raw',
-            dtype=sightlinedtype)['R']
+    skymask = Skymask(A)
+    realradius = sightlines.R
     R = numpy.empty(NR, ('f4', 3))
-    w = A.skymask.mask
     mu = numpy.random.uniform(size=NR) * 2 - 1
     ra = numpy.random.uniform(size=NR) * 2 * numpy.pi
     R[:, 2] = mu
     rho = (1 - mu * mu) ** 0.5
     R[:, 0] = rho * numpy.cos(ra)
     R[:, 1] = rho * numpy.sin(ra)
-    w = A.skymask(R)
+    w = skymask(R)
     R = R[w > 0]
     radius = kde.gaussian_kde(realradius).resample(size=len(R)).ravel()
     R *= radius[:, None]
     print 'random', R.max(), len(R)
-    R += A.BoxSize * 0.5
     return R
 
 def getdata(A):
-    raw = numpy.fromfile(A.datadir + '/QSOcatelog.raw', dtype=sightlinedtype)
-    ra = raw['RA'] / 180 * numpy.pi
-    dec = raw['DEC'] / 180 * numpy.pi
+    sightlines = Sightlines(A)
+    skymask = Skymask(A)
+    ra = sightlines.RA / 180 * numpy.pi
+    dec = sightlines.DEC / 180 * numpy.pi
     print ra.min(), ra.max(), dec.min(), dec.max()
-    R = numpy.empty((len(raw), 3))
+    R = numpy.empty((len(sightlines), 3))
     R[:, 2] = numpy.sin(dec)
     x = numpy.cos(dec)
     R[:, 0] = x * numpy.cos(ra)
     R[:, 1] = x * numpy.sin(ra)
-    R[...] *= raw['R'][:, None]
-    w = A.skymask(R)
+    R[...] *= sightlines.R[:, None]
+    w = skymask(R)
     R = R[ w > 0]
-    R += A.BoxSize * 0.5
     print 'data', R.max(), len(R)
     return R
 
@@ -58,6 +59,7 @@ def main(A):
     corr = (DD.sum1 + r ** 2 * RR.sum1 - 2 * r * DR.sum1) / (r ** 2 * RR.sum1)
     numpy.savetxt(stdout, zip(DD.centers, corr), fmt='%g')
     r = DD.centers
+
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     figure = Figure(figsize=(4, 3), dpi=200)
@@ -65,7 +67,7 @@ def main(A):
     ax.plot(r / 1000, (r / 1000) ** 2 * corr, 'o ', label='LS')
     ax.legend()
     canvas = FigureCanvasAgg(figure)
-    figure.savefig('quasar-corr.svg')
+    figure.savefig(os.path.join(A.datadir, 'quasar-corr.svg'))
 
 
 if __name__ == '__main__':
