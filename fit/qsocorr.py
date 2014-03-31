@@ -31,7 +31,7 @@ def getrandom(A):
     print 'random', R.max(), len(R)
     return R
 
-def getdata(A):
+def getqso(A):
     sightlines = Sightlines(A)
     skymask = Skymask(A)
     ra = sightlines.RA / 180 * numpy.pi
@@ -49,7 +49,7 @@ def getdata(A):
     return R
 
 def main(A):
-    data = correlate.points(getdata(A))
+    data = correlate.points(getqso(A))
     random = correlate.points(getrandom(A))
     binning = correlate.RBinning(160000, 20)
     DD = correlate.paircount(data, data, binning)

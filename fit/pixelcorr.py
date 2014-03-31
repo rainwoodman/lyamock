@@ -11,38 +11,58 @@ from common import SpectraOutput
 from common import MeanFractionMeasured
 from lib.chunkmap import chunkmap
 
-def makedata(A, Zmin, Zmax, RfLamMin, RfLamMax):
+def getforest(A, Zmin, Zmax, RfLamMin, RfLamMax, combine=1):
     spectra = SpectraOutput(A)
     meanFred = MeanFractionMeasured(A, real=False)
     meanFreal = MeanFractionMeasured(A, real=True)
-    Npixels = spectra.sightlines.Npixels.sum()
+
+    # will combine every this many pixels
+    Npixels1 = spectra.sightlines.Npixels // combine
+    Offset1 = numpy.concatenate([[0], numpy.cumsum(Npixels1)])
+    Npixels = Npixels1.sum()
+    print Npixels1.min(), Npixels1.max()
+    print spectra.sightlines.Npixels.min(), spectra.sightlines.Npixels.max()
     data = sharedmem.empty(Npixels, ('f4', 3))
     DFred, DFreal, Delta = data.T
     pos = sharedmem.empty(Npixels, ('f4', 3))
+    x, y, z = pos.T
     mask = sharedmem.empty(Npixels, '?')
+    id = sharedmem.empty(Npixels, 'i4')
+
     def work(i):
-        sl = spectra.Accessor.getslice(i)
+        def combinepixels(value, method=numpy.mean):
+            # reduce the number of pixels with 'method'
+            return \
+                method(value[:Npixels1[i] * combine]\
+                .reshape([Npixels1[i]] + [combine]), 
+                    axis=-1)
+        sl = slice(Offset1[i], Npixels1[i] + Offset1[i])
         a = spectra.a[i]
-        DFred[sl] = numpy.exp(-spectra.taured[i]) / meanFred(a) - 1
-        DFreal[sl] = numpy.exp(-spectra.taureal[i]) / meanFreal(a) - 1
-        Delta[sl] = spectra.delta[i]
-        pos[sl] = spectra.position(i)
+        Fred = numpy.exp(-spectra.taured[i]) / meanFred(a) - 1
+        Freal = numpy.exp(-spectra.taureal[i]) / meanFreal(a) - 1
+        DFred[sl] = combinepixels(Fred)
+        DFreal[sl] = combinepixels(Freal)
+        Delta[sl] = combinepixels(spectra.delta[i])
+        p = spectra.position(i)
+        x[sl] = combinepixels(p[:, 0])
+        y[sl] = combinepixels(p[:, 1])
+        z[sl] = combinepixels(p[:, 2])
 
         m = spectra.z[i] > Zmin
         m &= spectra.z[i] < Zmax
         m &= spectra.RfLam(i) > RfLamMin
         m &= spectra.RfLam(i) < RfLamMax
-        mask[sl] = m
+        mask[sl] = combinepixels(m, method=numpy.all)
+        id[sl] = i
     chunkmap(work, range(len(spectra)), 100)
 
-    return data[mask], pos[mask]
+    return data[mask], pos[mask], id[mask]
 
 def main(A):
-    delta, pos = makedata(A, 
-            Zmin=2.0, Zmax=2.2, RfLamMin=1040, RfLamMax=1185)
-    delta = delta[::10]
-    pos = pos[::10]
+    delta, pos, id = getforest(A, 
+            Zmin=2.0, Zmax=2.2, RfLamMin=1040, RfLamMax=1185, combine=12)
     print len(pos)
+    print pos, delta
     data = correlate.field(pos, value=delta)
     DD = correlate.paircount(data, data, correlate.RBinning(160000, 40))
     r = DD.centers
