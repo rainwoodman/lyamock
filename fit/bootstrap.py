@@ -4,6 +4,8 @@ from kdcount import correlate
 import chealpy
 import sharedmem
 from common import Config
+from common import CorrFunc, CorrFuncCollection
+
 import os.path
 
 from qsocorr import getqso, getrandom
@@ -17,8 +19,11 @@ class RmuBinningIgnoreSelf(correlate.RmuBinning):
         dr = r1 - r2
         dot = numpy.einsum('ij, ij->i', dr, center) 
         center = numpy.einsum('ij, ij->i', center, center) ** 0.5
-        mu = dot / (center * r)
-        mu[r == 0] = 10.0
+        div = center * r
+        mask = div == 0
+        div[mask] = 1.0
+        mu = dot / div
+        mu[mask] = 10.0
         objid1 = data1.extra[i]
         objid2 = data2.extra[j]
         mu[objid1 == objid2] = 10.0
@@ -42,12 +47,13 @@ def chop(A, Nside, pos):
 
 def main(A):
     binning = RmuBinningIgnoreSelf(80000, Nbins=20, Nmubins=48, 
-            observer=A.BoxSize * 0.5)
+            observer=0)
     r, mu = binning.centers
 
     qpos = getqso(A)
     rpos = getrandom(A)
-    fdelta, fpos, objectid = getforest(A, Zmin=2.0, Zmax=2.2, RfLamMin=1040, RfLamMax=1185, combine=12)
+    fdelta, fpos, objectid = getforest(A, Zmin=2.0, Zmax=2.2, RfLamMin=1040,
+            RfLamMax=1185, combine=12)
 
     qchunks = chop(A, 4, qpos) 
     rchunks = chop(A, 4, rpos)
@@ -71,7 +77,7 @@ def main(A):
     DQDFsum1, RQDFsum1, DFDFsum1 = sharedmem.empty([3, Nvars] + chunkshape)
     DQDFsum2, RQDFsum2, DFDFsum2 = sharedmem.empty([3] + chunkshape)
 
-    with sharedmem.MapReduce(np=64) as pool:
+    with sharedmem.MapReduce() as pool:
         def work(i):
             with pool.critical:
                 print 'doing chunk', i, Nchunks
@@ -103,22 +109,16 @@ def main(A):
                 print 'done chunk', i, Nchunks, len(fchunks[i])
         pool.map(work, range(Nchunks))
 
-    ratio = 1.0 * len(Qfull) / len(Rfull)
+    red = MakeBootstrapSample(r, mu, DQDQ, RQDQ, RQRQ,
+            DQDFsum1[0], DQDFsum2, RQDFsum1[0], RQDFsum2,
+            DFDFsum1[0], DFDFsum2, len(Qfull), len(Rfull))
+    real = MakeBootstrapSample(r, mu, DQDQ, RQDQ, RQRQ,
+            DQDFsum1[1], DQDFsum2, RQDFsum1[1], RQDFsum2,
+            DFDFsum1[1], DFDFsum2, len(Qfull), len(Rfull))
+    delta = MakeBootstrapSample(r, mu, DQDQ, RQDQ, RQRQ,
+            DQDFsum1[2], DQDFsum2, RQDFsum1[2], RQDFsum2,
+            DFDFsum1[2], DFDFsum2, len(Qfull), len(Rfull))
 
-    xiQQ = CorrFuncQQ(r, mu, DQDQ.sum(axis=0), RQDQ.sum(axis=0), RQRQ.sum(axis=0), ratio)
-    xiQFred = CorrFuncQF(
-            r, mu, DQDFsum1[0].sum(axis=0), RQDFsum1[0].sum(axis=0), 
-            RQDFsum2.sum(axis=0), ratio)
-    xiQFreal = CorrFuncQF(
-            r, mu, DQDFsum1[1].sum(axis=0), RQDFsum1[1].sum(axis=0), 
-            RQDFsum2.sum(axis=0), ratio)
-    xiQFdelta = CorrFuncQF(
-            r, mu, DQDFsum1[2].sum(axis=0), RQDFsum1[2].sum(axis=0), 
-            RQDFsum2.sum(axis=0), ratio)
-
-    xiFFred = CorrFuncFF(r, mu, DFDFsum1[0].sum(axis=0), DFDFsum2.sum(axis=0))
-    xiFFreal = CorrFuncFF(r, mu, DFDFsum1[1].sum(axis=0), DFDFsum2.sum(axis=0))
-    xiFFdelta = CorrFuncFF(r, mu, DFDFsum1[2].sum(axis=0), DFDFsum2.sum(axis=0))
     numpy.savez(os.path.join(A.datadir, 'bootstrap.npz'), 
             r=r,
             mu=mu,
@@ -134,71 +134,25 @@ def main(A):
             Qchunksize=qchunks.end - qchunks.start,
             Rchunksize=rchunks.end - rchunks.start,
             Fchunksize=fchunks.end - fchunks.start,
-            xiQQ=xiQQ,
-            xiQFred=xiQFred,
-            xiQFreal=xiQFreal,
-            xiQFdelta=xiQFdelta,
-            xiFFred=xiFFred,
-            xiFFreal=xiFFreal,
-            xiFFdelta=xiFFdelta,
+            red=red,
+            real=real,
+            delta=delta,
             )
 
-from scipy.special import sph_jn, legendre
-from numpy.polynomial.legendre import Legendre, legfit, legvander
+def MakeBootstrapSample(r, mu,
+        DQDQ, RQDQ, RQRQ,
+        DQDFsum1, DQDFsum2, 
+        RQDFsum1, RQDFsum2,
+        DFDFsum1, DFDFsum2,
+        Nq, Nr):
+        ratio = 1.0 * Nq / Nr
+        return CorrFuncCollection([
+            CorrFunc.QQ(r, mu, DQDQ.sum(axis=0), RQDQ.sum(axis=0),
+                RQRQ.sum(axis=0), ratio),
+            CorrFunc.QF(r, mu, DQDFsum1.sum(axis=0), RQDFsum1.sum(axis=0), 
+             RQDFsum2.sum(axis=0), ratio),
+            CorrFunc.FF(r, mu, DFDFsum1.sum(axis=0), DFDFsum2.sum(axis=0))])
 
-class CorrFunc(object): 
-    def __init__(self, r, mu, xi):
-        self.r = r
-        self.mu = mu
-        self.xi = xi
-
-        if False and (mu >= 0).all():
-            mu = numpy.concatenate([-mu[::-1], mu])
-            xi = numpy.concatenate([xi.T[::-1], xi.T], axis=0).T
-        self.poles = legfit(mu, xi.T, 2)
-
-        self.monopole = self.poles[0]
-        self.dipole = self.poles[1]
-        self.quadrupole = self.poles[2]
-
-    def __reduce__(self):
-        return (CorrFunc, (self.r, self.mu, self.xi), )
-
-class CorrFuncQQ(CorrFunc):
-    def __init__(self, r, mu, DQDQ, RQDQ, RQRQ, ratio):
-        #ratio is D/ R
-        mu = mu[len(mu)//2:]
-        xifull = (musym(DQDQ) \
-                - musym(RQDQ) * 2 * ratio) \
-                / (musym(RQRQ) * ratio ** 2) + 1
-        xi = xifull[1:-1, 0:-1]
-        CorrFunc.__init__(self, r, mu, xi)
-
-class CorrFuncQF(CorrFunc):
-    def __init__(self, r, mu, DQDFsum1, RQDFsum1, RQDFsum2, ratio):
-        xifull = (DQDFsum1 - RQDFsum1 * ratio) \
-                / (RQDFsum2 * ratio)
-        xi = xifull[1:-1, 1:-1]
-        CorrFunc.__init__(self, r, mu, xi)
-
-class CorrFuncFF(CorrFunc):
-    def __init__(self, r, mu, DFDFsum1, DFDFsum2):
-        xifull = musym(DFDFsum1) / musym(DFDFsum2)
-        xi = xifull[1:-1, 0:-1]
-        mu = mu[len(mu)//2:]
-        CorrFunc.__init__(self, r, mu, xi)
-
-def musym(arr):
-    """ symmetrize the mu (last) direction of a (r, mu) matrix,
-        the size along mu direction will be halved! 
-        **we do not divided by 2 **
-        assume mu goes from -1 to 1 (ish)
-        """
-    N = arr.shape[-1]
-    assert N % 2 == 0
-    h = N // 2
-    res = arr[..., h-1::-1] + arr[..., h:]
-    return res
 
 if __name__ == '__main__':
     from sys import argv

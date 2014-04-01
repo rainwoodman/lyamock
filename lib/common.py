@@ -7,7 +7,7 @@ from scipy.interpolate import interp1d
 from scipy.interpolate import UnivariateSpline
 from lib.cosmology import Cosmology, Lazy
 
-class Config(object):
+class ConfigBase(object):
     def __init__(self, paramfile):
         s = file(paramfile).read().replace(';', ',').replace('#', ';')
         config = ConfigParser.ConfigParser()
@@ -15,20 +15,26 @@ class Config(object):
 
         self.config = config
 
-        def export(section, names, type=str, **kwargs):
-            if not isinstance(names, (list, tuple)):
-                names = [names, ]
+    def export(self, section, names, type=str, **kwargs):
+        if not isinstance(names, (list, tuple)):
+            names = [names, ]
 
-            for name in names:
-                try:
-                    s = self.config.get(section, name)
-                    v = type(s)
-                except ConfigParser.NoOptionError:
-                    if 'default' in kwargs:
-                        v = kwargs['default']
-                    else:
-                        raise
-                setattr(self, name, v)
+        for name in names:
+            try:
+                s = self.config.get(section, name)
+                v = type(s)
+            except ConfigParser.NoOptionError:
+                if 'default' in kwargs:
+                    v = kwargs['default']
+                else:
+                    raise
+            setattr(self, name, v)
+
+class Config(ConfigBase):
+    def __init__(self, paramfile):
+        ConfigBase.__init__(self, paramfile)
+
+        export = self.export
 
         export("Cosmology", [
             "Sigma8",
@@ -631,6 +637,124 @@ class SpectraOutput(object):
 
     def RfLam(self, i):
         return self.Lam[i] / (1 + self.sightlines.Z_RED[i])
+
+from numpy.polynomial.legendre import Legendre, legfit, legvander
+
+class CorrFunc(object): 
+    def __init__(self, r, mu, xi=None):
+        self.r = r
+        self.mu = mu
+        if xi is None:
+            xi = numpy.zeros((len(r), len(mu)))
+
+        assert xi.shape == (len(r), len(mu))
+
+        self.xi = xi
+
+    @Lazy
+    def rmesh(self):
+        return numpy.tile(self.r[:, None], (1, len(self.mu)))
+    @Lazy
+    def mumesh(self):
+        return numpy.tile(self.mu[None, :], (len(self.r), 1))
+
+    @Lazy
+    def poles(self):
+        return legfit(self.mu, self.xi.T, 2)
+
+    @property
+    def monopole(self):
+        return self.poles[0]
+    @property
+    def dipole(self):
+        return self.poles[1]
+    @property
+    def quadrupole(self):
+        return self.poles[2]
+
+    def extract(self, rmask, mumask):
+        """ extract a portion of the CorrFunc """
+        return CorrFunc(self.r[rmask], self.mu[mumask],
+                self.xi[rmask][:, mumask])
+
+    def copy(self):
+        return CorrFunc(self.r, self.mu, self.xi.copy())
+
+    @staticmethod
+    def QQ(r, mu, DQDQ, RQDQ, RQRQ, ratio):
+        mu = mu[len(mu)//2:]
+        xifull = (musym(DQDQ) \
+                - musym(RQDQ) * 2 * ratio) \
+                / (musym(RQRQ) * ratio ** 2) + 1
+        xi = xifull[1:-1, 0:-1]
+        return CorrFunc(r, mu, xi)
+    @staticmethod
+    def QF(r, mu, DQDFsum1, RQDFsum1, RQDFsum2, ratio):
+        xifull = (DQDFsum1 - RQDFsum1 * ratio) \
+                / (RQDFsum2 * ratio)
+        xi = xifull[1:-1, 1:-1]
+        return CorrFunc(r, mu, xi)
+
+    @staticmethod
+    def FF(r, mu, DFDFsum1, DFDFsum2):
+        xifull = musym(DFDFsum1) / musym(DFDFsum2)
+        xi = xifull[1:-1, 0:-1]
+        mu = mu[len(mu)//2:]
+        return CorrFunc(r, mu, xi)
+
+    def __getstate__(self):
+        return (self.r, self.mu, self.xi)
+
+    def __setstate__(self, state):
+        self.r, self.mu, self.xi = state
+
+class CorrFuncCollection(list):
+    def __init__(self, funcs):
+        list.__init__(self, funcs)
+
+    def copy(self):
+        return CorrFuncCollection([f.copy() for f in self])
+
+    @Lazy
+    def rmesh(self):
+        return numpy.concatenate(
+                [func.rmesh.flat
+                    for func in self])
+    @Lazy
+    def mumesh(self):
+        return numpy.concatenate(
+                [func.mumesh.flat
+                    for func in self])
+
+    def compress(self):
+        """ return an array including all dofs
+            of the correlation functions inside the collection
+        """
+        return numpy.concatenate(
+                [func.xi.flat
+                    for func in self])
+
+    def uncompress(self, xicompressed):
+        """fill the correlation function with compressed xi compress to self,
+           returns self for chaining """
+        offset = 0
+        assert len(xicompressed) == numpy.sum([func.xi.size for func in self])
+        for func in self:
+            func.xi.flat[...] = xicompressed[offset:]
+            offset += func.xi.size
+        return self
+
+def musym(arr):
+    """ symmetrize the mu (last) direction of a (r, mu) matrix,
+        the size along mu direction will be halved! 
+        **we do not divided by 2 **
+        assume mu goes from -1 to 1 (ish)
+        """
+    N = arr.shape[-1]
+    assert N % 2 == 0
+    h = N // 2
+    res = arr[..., h-1::-1] + arr[..., h:]
+    return res
 
 
 if __name__ == '__main__':
