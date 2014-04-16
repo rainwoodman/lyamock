@@ -38,13 +38,10 @@ def main(A):
     Nsamples = sightlines.Nsamples.sum()
     print 'total number of pixels', Nsamples
 
-    deltafield = numpy.memmap(A.DeltaField, mode='w+', 
-                dtype='f4', shape=Nsamples)
-    velfield = numpy.memmap(A.VelField, mode='w+', 
-                dtype='f4', shape=Nsamples)
-    objectidfield = numpy.memmap(A.ObjectIDField, mode='w+', 
-                dtype='i4', shape=Nsamples)
-
+    deltafield = sharedmem.empty(shape=Nsamples, dtype='f4')
+    velfield = sharedmem.empty(shape=Nsamples, dtype='f4')
+    objectidfield = sharedmem.empty(shape=Nsamples, dtype='i4')
+    
     processors = [ 
             AddDelta,
             AddDisp(0),
@@ -97,6 +94,11 @@ def main(A):
     var1 = numpy.mean(var1list)
     print 'gaussian-variance is', var0 + var1 + varlya
     numpy.savetxt(A.datadir + '/gaussian-variance.txt', [var0 + var1 + varlya])
+
+    deltafield.tofile(A.DeltaField)
+    velfield.tofile(A.VelField)
+    objectidfield.tofile(A.ObjectIDField)
+
 
 
 def initcoarse(A):

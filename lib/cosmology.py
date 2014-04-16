@@ -123,6 +123,9 @@ class Cosmology(object):
     func.inv = inv
     return func
 
+  def D(self, a):
+    """ Dplus relative to z=0"""
+    return self.Dplus(a) / self.Dplus(1.0)
   @Lazy
   def Dplus(self):
     M, L = self.M, self.L

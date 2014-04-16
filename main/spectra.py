@@ -1,5 +1,5 @@
 import numpy
-
+import sharedmem
 from common import Config
 from common import Sightlines
 from common import FGPAmodel
@@ -13,8 +13,8 @@ from lib.chunkmap import chunkmap
 class SpectraMaker(object):
     def __init__(self, config, sightlines):
         self.sightlines = sightlines
-        self.deltafield = numpy.memmap(config.DeltaField, mode='r', dtype='f4')
-        self.velfield = numpy.memmap(config.VelField, mode='r', dtype='f4')
+        self.deltafield = numpy.fromfile(config.DeltaField, dtype='f4')
+        self.velfield = numpy.fromfile(config.VelField, dtype='f4')
         self.var = numpy.loadtxt(config.datadir + '/gaussian-variance.txt')
         self.config = config
         # to preload these properties.

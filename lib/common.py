@@ -5,7 +5,9 @@ import ConfigParser
 import argparse
 from scipy.interpolate import interp1d
 from scipy.interpolate import UnivariateSpline
+from scipy.integrate import quad, simps
 from lib.cosmology import Cosmology, Lazy
+from lib.sph_bessel import j0, j2, j4
 
 class ConfigBase(object):
     def __init__(self, paramfile):
@@ -14,6 +16,15 @@ class ConfigBase(object):
         config.readfp(StringIO.StringIO(s))
 
         self.config = config
+        export = self.export
+
+        export("Cosmology", "G", type=float, default=43007.1)
+        export("Cosmology", "C", type=float, default=299792.458)
+        export("Cosmology", "H0", type=float, default=0.1)
+        export("Cosmology", "LymanAlpha", type=float, default=1216.0)
+        export("Cosmology", "LymanBeta", type=float, default=1026.0)
+
+        self.DH = self.C / self.H0
 
     def export(self, section, names, type=str, **kwargs):
         if not isinstance(names, (list, tuple)):
@@ -43,12 +54,6 @@ class Config(ConfigBase):
             "OmegaL", 
             "h"] , type=float)
 
-        export("Cosmology", "G", type=float, default=43007.1)
-        export("Cosmology", "C", type=float, default=299792.458)
-        export("Cosmology", "H0", type=float, default=0.1)
-
-
-        self.DH = self.C / self.H0
         self.cosmology = Cosmology(M=self.OmegaM, 
             L=self.OmegaL, B=self.OmegaB, h=self.h, sigma8=self.Sigma8)
 
@@ -104,7 +109,7 @@ class Config(ConfigBase):
 
         export("Quasar", "QSOScale", type=float)
 
-        self.NmeshQSO = 2 ** (int(numpy.log2(self.BoxSize / self.Nrep / self.QSOScale) + 0.5))
+        self.NmeshQSO = 2 ** (int(numpy.log2(self.BoxSize / self.Nrep / self.QSOScale) + .5))
         if self.NmeshQSO < 1: self.NmeshQSO = 1
 
         export("Output", "datadir")
@@ -203,7 +208,7 @@ class Layout(object):
 
 def QSOBiasModel(config):
     """ returns a function evaluating QSO bias
-        at given R
+        at given a
 
         current file is copied from 
     """
@@ -227,13 +232,13 @@ def QSOBiasModel(config):
     else:
         z, bias, err = numpy.loadtxt(config.QSOBiasInput, unpack=True)
     a = 1 / (z + 1.)
-    R = config.cosmology.Dc(a) * config.DH
-    spl = UnivariateSpline(R, bias, 1 / err)
+#    R = config.cosmology.Dc(a) * config.DH
+    spl = UnivariateSpline(a, bias, 1 / err)
     return spl 
 
 def QSODensityModel(config):
     """ returns a function evaluating 
-        Survey QSO number density at given R
+        Survey QSO number density at given a
         This will be adjusted by the sky mask
 
         the input surveydensityfile, constains
@@ -272,7 +277,7 @@ def QSODensityModel(config):
 
     # fix it at z=0.
     density[0] = 0
-    return interp1d(R, density, bounds_error=False, fill_value=0.0)
+    return interp1d(a[::-1], density[::-1], bounds_error=False, fill_value=0.0)
 
 try:
     import chealpy
@@ -308,21 +313,73 @@ class Skymask(object):
             #Nside, 0.5 * numpy.pi - dec, ra)
             return self.mask[ipix]
 
-def PowerSpectrum(A):
-    power = A.PowerSpectrumCache
-    try:
-        k, p = numpy.loadtxt(power, unpack=True)
-        print 'using power from file ', power
-    except IOError:
-        print 'using power from pycamb, saving to ', power
-        Pk = A.cosmology.Pk
-        k = Pk.x / A.DH
-        p = Pk.y * A.DH ** 3 * (2 * numpy.pi) ** -3
-        numpy.savetxt(power, zip(k, p))
+class PowerSpectrum(object):
+    """ PowerSpectrum is camb at z=0. Need to use
+        Dplus to grow(shrink) to given redshift
+    """
+    def __init__(self, A):
+        power = A.PowerSpectrumCache
+        try:
+            k, p = numpy.loadtxt(power, unpack=True)
+            print 'using power from file ', power
+        except IOError:
+            print 'using power from pycamb, saving to ', power
+            Pk = A.cosmology.Pk
+            k = Pk.x / A.DH
+            p = Pk.y * A.DH ** 3 * (2 * numpy.pi) ** -3
+            numpy.savetxt(power, zip(k, p))
 
-    p[numpy.isnan(p)] = 0
-    power = k, p
-    return power
+        # k ,and p are in KPC/h units!
+        p[numpy.isnan(p)] = 0
+        self.k = k
+        self.p = p
+    def __getitem__(self, i):
+        return [self.k, self.p][i]
+    def __iter__(self):
+        return iter([self.k, self.p])
+
+    def monopole(self, r):
+        return self.pole(r, 0)
+
+    def quadrupole(self, r):
+        return self.pole(r, 2)
+
+    def hexadecapole(self, r):
+        return self.pole(r, 4)
+
+    def __call__(self, K):
+        return self.Pfunc(K)
+
+    @Lazy
+    def Pfunc(self):
+        K, P = self
+        mask = ~numpy.isnan(P) & (K > 0)
+        K = K[mask]
+        P = P[mask]
+        return interp1d(K, P, kind=5)
+
+    def pole(self, r, order):
+        """calculate the multipoles of xi at order for given P(K)
+            in kpc/h units 
+            note that the j2 pole is negative from pat's
+            1104.5244v2.pdf
+        """
+        assert order in [0, 2, 4]
+        kernel = [j0, None, j2, None, j4][order]
+        Pfunc = self.Pfunc
+        xi = numpy.empty_like(r)
+        K, P = self
+        Kmin = K.min()
+        Kmax = K.max()
+        for i in range(len(r)):
+            def func(k):
+                # damping from Xiao
+                rt = 4 * numpy.pi * Pfunc(k) * k ** 2 * \
+                     numpy.exp(- (k *1e3) ** 2) * kernel(k * r[i])
+                rt = rt * (2 * numpy.pi) ** 3 # going from GADGET to xiao
+                return rt
+            xi[i] = quad(func, Kmin, Kmax)[0]
+        return xi * (2 * numpy.pi) ** -3
 
 def MeanFractionModel(config):
     A = config.MeanFractionA
@@ -401,7 +458,7 @@ class Sightlines(object):
             if LogLamMin and LogLamMax are given,
             each sightline is chopped at these wave lengths.
 
-            otherwise the lines will cover from 1026 to 1216.   
+            otherwise the lines will cover from config.LymanBeta to config.LymanAlpha.   
         """
 
         self.data = numpy.fromfile(config.QSOCatelog, 
@@ -410,11 +467,12 @@ class Sightlines(object):
         self.DEC = self.data['DEC']
         self.RA = self.data['RA']
         self.config = config
-        self.LogLamMin = numpy.log10((self.Z_REAL + 1) * 1026.)
+        self.LogLamMin = numpy.log10((self.Z_REAL + 1) * self.config.LymanBeta)
+
         if LogLamMin is not None:
             self.LogLamMin = numpy.maximum(LogLamMin, self.LogLamMin)
 
-        self.LogLamMax = numpy.log10((self.Z_REAL + 1) * 1216.)
+        self.LogLamMax = numpy.log10((self.Z_REAL + 1) * config.LymanAlpha)
         if LogLamMax is not None:
             self.LogLamMax = numpy.minimum(LogLamMax, self.LogLamMax)
 
@@ -439,7 +497,7 @@ class Sightlines(object):
             and with added padding so that thermal convolution is safe.
         """
         cosmology = self.config.cosmology
-        a1 = 1216.0 / 10 ** self.LogLamMin 
+        a1 = self.config.LymanAlpha / 10 ** self.LogLamMin 
         R1 = cosmology.Dc(a1) * self.config.DH
         R1full = self.R1
         rel = numpy.int32((R1 - R1full - 4000) // self.config.LogNormalScale)
@@ -451,7 +509,7 @@ class Sightlines(object):
     @Lazy
     def ActiveSampleEnd(self):
         cosmology = self.config.cosmology
-        a2 = 1216.0 / 10 ** self.LogLamMax
+        a2 = self.config.LymanAlpha / 10 ** self.LogLamMax
         R2 = cosmology.Dc(a2) * self.config.DH
         R1full = self.R1
         rel = numpy.int32((R2 - R1full + 4000) // self.config.LogNormalScale)
@@ -474,7 +532,7 @@ class Sightlines(object):
             R1 + arange(Nsamples) * config.LogNormalScale
         """
         cosmology = self.config.cosmology
-        a1 = 1216. / (1026. * (self.Z_REAL + 1))
+        a1 = self.config.LymanAlpha / (self.config.LymanBeta * (self.Z_REAL + 1))
         R1 = cosmology.Dc(a1) * self.config.DH
         return R1
 
@@ -612,21 +670,21 @@ class SpectraOutput(object):
     def z(self):
         LogLamGrid = self.config.LogLamGrid
         LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
-        z = 10 ** LogLamCenter / 1216.0 - 1
+        z = 10 ** LogLamCenter / self.config.LymanAlpha - 1
         return self.Faker(z)
 
     @Lazy
     def a(self):
         LogLamGrid = self.config.LogLamGrid
         LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
-        a = 1216.0 / 10 ** LogLamCenter
+        a = self.config.LymanAlpha / 10 ** LogLamCenter
         return self.Faker(a)
         
     @Lazy
     def R(self):
         LogLamGrid = self.config.LogLamGrid
         LogLamCenter = 0.5 * (LogLamGrid[1:] + LogLamGrid[:-1])
-        z = 10 ** LogLamCenter / 1216.0 - 1
+        z = 10 ** LogLamCenter / self.config.LymanAlpha - 1
         a = 1 / (z + 1)
         Dc = self.config.cosmology.Dc(a) * self.config.DH
         return self.Faker(Dc)
@@ -660,17 +718,33 @@ class CorrFunc(object):
 
     @Lazy
     def poles(self):
-        return legfit(self.mu, self.xi.T, 2)
+        orders = 4
+        xi = self.xi
+        r = self.r
+        mu = self.mu
+        
+        Nr, Nmu = self.xi.shape
+        v = legvander(mu, orders)
+        poles = numpy.empty((len(r), orders+1))
+        sym = (mu >= 0).all()
+        for i in range(orders + 1):
+            norm = simps(v[:, i] ** 2, mu)            
+            if sym and i % 2 == 1:
+                poles[:, i] = 0
+            else:
+                poles[:, i] = simps(xi * v[:, i][None, :], mu) / norm
+
+        return poles
 
     @property
     def monopole(self):
-        return self.poles[0]
+        return self.poles[:, 0]
     @property
     def dipole(self):
-        return self.poles[1]
+        return self.poles[:, 1]
     @property
     def quadrupole(self):
-        return self.poles[2]
+        return self.poles[:, 2]
 
     def extract(self, rmask, mumask):
         """ extract a portion of the CorrFunc """
@@ -702,6 +776,16 @@ class CorrFunc(object):
         mu = mu[len(mu)//2:]
         return CorrFunc(r, mu, xi)
 
+    def __repr__(self):
+        a = numpy.get_printoptions()
+        try:
+            numpy.set_printoptions(threshold=4, edgeitems=2)
+            return "<CorrFunc (%d, %d) on r=%s, mu=%s>" % \
+                    (self.xi.shape[0], self.xi.shape[1], str(self.r), str(self.mu))
+        finally:
+            numpy.set_printoptions(**a)
+
+
     def __getstate__(self):
         return (self.r, self.mu, self.xi)
 
@@ -716,6 +800,11 @@ class CorrFuncCollection(list):
         return CorrFuncCollection([f.copy() for f in self])
 
     @Lazy
+    def imesh(self):
+        return numpy.repeat(numpy.arange(len(self)),
+                [func.xi.size for func in self])
+
+    @Lazy
     def rmesh(self):
         return numpy.concatenate(
                 [func.rmesh.flat
@@ -725,6 +814,27 @@ class CorrFuncCollection(list):
         return numpy.concatenate(
                 [func.mumesh.flat
                     for func in self])
+
+    def extract(self, mask):
+        """ extract based on a global mask of r, mu mesh 
+            NOTE: the mask has to be seperatable for different
+            CorrFunc components.
+
+            easiest way to guarentee this is to use
+            (.rmesh > ???) & (.mumesh > ???)
+        """
+        offset = 0
+        newfuncs = []
+        for func in self:
+            mymask = mask[offset:offset+func.xi.size]
+            mymask = mymask.reshape(func.xi.shape)
+            # now lets use the assumptiong that mymask is seperatable
+            rmask = mymask.any(axis=1)
+            mumask = mymask.any(axis=0)
+            newfuncs.append(func.extract(rmask, mumask))
+            offset += func.xi.size
+        
+        return CorrFuncCollection(newfuncs)
 
     def compress(self):
         """ return an array including all dofs
@@ -741,6 +851,8 @@ class CorrFuncCollection(list):
         assert len(xicompressed) == numpy.sum([func.xi.size for func in self])
         for func in self:
             func.xi.flat[...] = xicompressed[offset:]
+            if hasattr(func, 'poles'):
+                del func.poles
             offset += func.xi.size
         return self
 

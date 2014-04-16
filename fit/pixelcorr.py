@@ -16,6 +16,8 @@ def getforest(A, Zmin, Zmax, RfLamMin, RfLamMax, combine=1):
     meanFred = MeanFractionMeasured(A, real=False)
     meanFreal = MeanFractionMeasured(A, real=True)
 
+    combine = numpy.minimum(spectra.sightlines.Npixels.max(), combine)
+
     # will combine every this many pixels
     Npixels1 = spectra.sightlines.Npixels // combine
     Offset1 = numpy.concatenate([[0], numpy.cumsum(Npixels1)])
@@ -60,7 +62,7 @@ def getforest(A, Zmin, Zmax, RfLamMin, RfLamMax, combine=1):
 
 def main(A):
     delta, pos, id = getforest(A, 
-            Zmin=2.0, Zmax=2.2, RfLamMin=1040, RfLamMax=1185, combine=12)
+            Zmin=2.0, Zmax=2.2, RfLamMin=1040, RfLamMax=1185, combine=4)
     print len(pos)
     print pos, delta
     data = correlate.field(pos, value=delta)
@@ -73,12 +75,15 @@ def main(A):
     figure = Figure(figsize=(4, 5), dpi=200)
     ax = figure.add_subplot(311)
     ax.plot(r / 1000, (r / 1000) ** 2 * xi[0], 'o ', label='$dF$ RSD')
+    ax.set_ylim(-0.4, 1.0)
     ax.legend()
     ax = figure.add_subplot(312)
     ax.plot(r / 1000, (r / 1000) ** 2 * xi[1], 'o ', label='$dF$ Real')
+    ax.set_ylim(-0.4, 1.0)
     ax.legend()
     ax = figure.add_subplot(313)
     ax.plot(r / 1000, (r / 1000) ** 2 * xi[2], 'o ', label=r'$\delta_m$')
+    ax.set_ylim(-20, 60)
     ax.legend()
     canvas = FigureCanvasAgg(figure)
     figure.savefig(os.path.join(A.datadir, 'delta-corr-both.svg'))

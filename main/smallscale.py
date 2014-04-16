@@ -44,7 +44,7 @@ def initlya(A):
     print 'lya field', 'mean', deltalya.mean(), 'var', deltalya.var()
     print 'growth factor at z=2.0, 3.0', D2, D3
     Var = deltalya.var()
-    print 'variance adjusted to z=2.0, z=3.0', D2 ** 2 * Var, D3 **2 * Var
+    print 'lya variance adjusted to z=2.0, z=3.0', D2 ** 2 * Var, D3 **2 * Var
     return Var
 
 if __name__ == '__main__':

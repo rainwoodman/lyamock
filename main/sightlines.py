@@ -12,27 +12,40 @@ from lib.lazy import Lazy
 from lib import density
 
 # this code makes the sightlines
+from scipy.stats import norm
 
 def main(A):
     """ quasars identify quasars"""
     print 'preparing large scale modes'
 
     global shuffle, gaussian, powerspec
+    global var
     shuffle = density.build_shuffle((A.NmeshQSO, A.NmeshQSO, A.NmeshQSO //2 + 1))
     gaussian = density.begin_irfftn((A.NmeshQSO, A.NmeshQSO, A.NmeshQSO // 2 + 1),
             dtype=numpy.complex64)
     powerspec = PowerSpectrum(A)
     var0 = initcoarse(A)
-#    var1 = initqso1(A)
-#    var = var1 + var0
-#    print 'total variance', var, 'coarse', var0, 'qso', var1
+    var1 = initqso1(A)
+    var = var1 + var0
+    bias = QSOBiasModel(A)(1/3.5) 
+    D = A.cosmology.D(1/3.5)
+    print 'total variance', var, 'coarse', var0, 'qso', var1
+    print 'variance of QSO over density', var * (D * bias)** 2
 #    std = var ** 0.5
 #    std = 1.07401503829 
 #    mean =  4.04737352692e-06
 #    print 'first run finished.'
 #    print 'std =', std
 #   std is not used because we do not use the log normal 
-    std = 1.0
+    a = 1.0 / 3.0
+    SurveyQSOdensity = QSODensityModel(A)
+    qsonumberdensity = SurveyQSOdensity(a)
+    b = 500.0
+    percentile = b * qsonumberdensity * (A.BoxSize / A.Nrep / A.NmeshQSO)** 3
+
+    sigma = norm.ppf(1.0 - percentile)
+    print percentile, sigma
+    numpy.savetxt(A.datadir + '/qso-variance.txt', [var])
 
     layout = A.layout(A.NmeshQSO ** 3, 1024 * 128)
 
@@ -40,7 +53,7 @@ def main(A):
     output = file(A.QSOCatelog, mode='w')
     output.close()
 
-    Visitor.prepare(A, std)
+    Visitor.prepare(A, var0)
 
 #    sharedmem.set_debug(True)
     print 'spawn and work on intermediate scales'
@@ -56,7 +69,7 @@ def main(A):
                         raw = numpy.empty(len(QSOs), dtype=Sightlines.dtype)
                         raw['RA'] = QSOs.RA * 180 / numpy.pi
                         raw['DEC'] = QSOs.DEC * 180 / numpy.pi
-                        raw['Z_RED'] = -1.0
+                        raw['Z_RED'] = QSOs.Z
                         raw['Z_REAL'] = QSOs.Z
                         raw.tofile(output)
                         output.flush()
@@ -81,25 +94,30 @@ def initcoarse(A):
 
 def initqso1(A):
     print 'bootstrap the variance'
+    def kernel(kx, ky, kz, k):
+        f2 = 1 / (1 + (A.QSOScale * k) ** 2)
+        #f2 = numpy.exp(- (A.QSOScale * k) ** 2)
+        return f2
     with sharedmem.Pool() as pool:
       def work(seed):
         density.gaussian(gaussian, shuffle, seed)
         # add in the small scale power
         delta1, var1 = density.realize(powerspec, None, 
                   A.NmeshQSO, A.BoxSize / A.Nrep, Kmin=A.KSplit,
+                  kernel=kernel,
                   gaussian=gaussian)
         return var1
   
       # just do 16 small boxes to estimate the variance
-      var1 = numpy.mean(pool.map(work, A.RNG.randint(0, 1<<21, size=16)))
+      var1 = numpy.mean(pool.map(work, A.RNG.randint(0, 1<<21, size=1)))
     return var1
 
 
 class Visitor(object):
     @classmethod
-    def prepare(cls, A, std):
+    def prepare(cls, A, var0):
         cls.A = A
-        cls.std = std
+        cls.var0 = var0
         cls.Dplus = staticmethod(A.cosmology.Dplus)
         cls.Dc = staticmethod(A.cosmology.Dc)
 
@@ -111,15 +129,21 @@ class Visitor(object):
         A = self.A
         self.box = box
         density.gaussian(gaussian, shuffle, A.SeedTable[box.i, box.j, box.k])
+        def kernel(kx, ky, kz, k):
+            f2 = 1 / (1 + (A.QSOScale * k) ** 2)
+            #f2 = numpy.exp(- (A.QSOScale * k) ** 2)
+            return f2
         delta1, var1 = density.realize(powerspec, 
               None,
               A.NmeshQSO, A.BoxSize / A.Nrep, Kmin=A.KSplit,
+              kernel=kernel,
               gaussian=gaussian)
         self.delta = delta1
         self.Rmin = self.Dc(1 / (A.Zmin + 1)) * A.DH
         self.Rmax = self.Dc(1 / (A.Zmax + 1)) * A.DH
         self.rng = numpy.random.RandomState(A.SeedTable[box.i, box.j, box.k]) 
         self.cellsize = A.BoxSize / (A.NmeshQSO * A.Nrep)
+        self.var1 = var1
 
     def getcoarse(self, xyzqso):
         xyz = xyzqso + self.box.REPoffset * self.A.NmeshQSO 
@@ -137,20 +161,31 @@ class Visitor(object):
         xyz = xyz[mask]
         R = R[mask]
         a = self.Dc.inv(R / self.A.DH)
-        return xyz, R, a, delta
+        return xyz, a, delta
 
-    def getNqso(self, R, a, delta):
-        meandensity = self.SurveyQSOdensity(R)
-        bias = self.QSObias(R) 
-        D = self.Dplus(a) / self.Dplus(1.0)
+    def getNqso(self, a, delta):
+#        bias = self.QSObias(a) 
+        #always use z=2.0
+        A = self.A
+        D = A.cosmology.D(a)
+        bias = self.QSObias(a)
+        var = self.var1+self.var0
+        deltaLN = numpy.exp(D * delta - (D ** 2 * var) * 0.5)
+        qsonumberdensity = (deltaLN ** bias) * self.SurveyQSOdensity(a) 
 
-        overdensity = bias * D * delta
-#        # we do a lognormal to avoid negative number density
-#       lognormal messes it up
-#        lognormal(overdensity, self.std * (bias * D), out=overdensity)
-        numberdensity = meandensity * (1 + overdensity)
-        numberdensity[numberdensity < 0] = 0
-        Nqso = self.rng.poisson(numberdensity * self.cellsize ** 3)
+        Nqso = qsonumberdensity * self.cellsize ** 3
+        Nqso = self.rng.poisson(Nqso)
+        #percentile = b * qsonumberdensity * self.cellsize ** 3
+
+        #var = self.var1 + self.var0
+        #std = var ** 0.5
+        #mask = delta / std > norm.ppf(1.0 - percentile)
+        # save the number of qsos, for non-host it is zero
+        #Nexpected = numpy.zeros_like(delta)
+        #Nexpected[mask] = 1.0 / b
+        #Nqso = numpy.zeros_like(delta, 'int32')
+        #Nqso[...] = self.rng.poisson(Nexpected)
+
         return Nqso
 
     def makeqso(self, xyz, Nqso):
@@ -177,8 +212,8 @@ class Visitor(object):
                 prefilter=False)
 
         xyz = self.getcenter(xyzcoarse)    
-        xyz, R, a, delta = self.selectpixels(xyz, delta)
-        Nqso = self.getNqso(R, a, delta)
+        xyz, a, delta = self.selectpixels(xyz, delta)
+        Nqso = self.getNqso(a, delta)
         return self.makeqso(xyz, Nqso)
 
 if __name__ == '__main__':
