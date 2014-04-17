@@ -59,10 +59,10 @@ def main(A):
 
     qpos = getqso(A)
     rpos = getrandom(A)
-#   fdelta, fpos, objectid = getforest(A, Zmin=2.0, Zmax=3.0, RfLamMin=1040,
-#           RfLamMax=1216, combine=4)
-    fdelta, fpos = numpy.empty((2, 1, 3))
-    objectid = numpy.empty(1, dtype='i8')
+    fdelta, fpos, objectid = getforest(A, Zmin=2.0, Zmax=3.0, RfLamMin=1040,
+           RfLamMax=1216, combine=4)
+#    fdelta, fpos = numpy.empty((2, 1, 3))
+#    objectid = numpy.empty(1, dtype='i8')
 
     qchunks = chop(A, 4, qpos) 
     rchunks = chop(A, 4, rpos)

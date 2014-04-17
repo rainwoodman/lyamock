@@ -30,6 +30,7 @@ class CovConfig(ConfigBase):
         export = self.export
 
         export("General", "prefix")
+        export("General", "UseMocks", type=eval, default="None")
         export("General", "PowerSpectrumCache")
         export("General", "BigN", type=int)
         export("Fit", ["rmin", "rmax"], type=float)
@@ -50,15 +51,27 @@ class CovConfig(ConfigBase):
 
 class BootstrapDB(object):
     def __init__(self, config):
-        files = [
-                numpy.load(f) 
-                for f in glob(os.path.join(config.prefix, '*', '*', 'bootstrap.npz'))]
+        def getfilename(mock):
+            dir = os.path.join(config.prefix, mock)
+            paramfile = os.path.join(config.prefix, mock, 'paramfile')
+            c = Config(paramfile, basedir=dir)
+            return os.path.join(c.datadir, 'bootstrap.npz')
+
+        if config.UseMocks is None:
+            filenames = sorted(list(glob(os.path.join(config.prefix, '[0-9]*', '*',
+                'bootstrap.npz'))))
+        else:
+            filenames = [getfilename(mock) for mock in config.UseMocks]
+
+        files = [ numpy.load(f)  for f in filenames]
+
+        print 'using', len(filenames), ' files', filenames
 
         self.r = files[0]['r']
         self.mu = files[0]['mu']
 
         # b/c they all have the same cosmology
-        self.eigenmodes = files[0]['eigenmodes'][()]
+        self.eigenmodes = EigenModes(files[0]['eigenmodes'])
 
         self.DQDQ, self.RQDQ, self.RQRQ = sharedmem.empty(
                 [3, len(files)] + list(files[0]['DQDQ'].shape))

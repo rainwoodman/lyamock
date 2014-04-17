@@ -42,7 +42,8 @@ class ConfigBase(object):
             setattr(self, name, v)
 
 class Config(ConfigBase):
-    def __init__(self, paramfile):
+    def __init__(self, paramfile, basedir=None):
+        """ if given basedir will be prefixed to datadir """
         ConfigBase.__init__(self, paramfile)
 
         export = self.export
@@ -113,6 +114,8 @@ class Config(ConfigBase):
         if self.NmeshQSO < 1: self.NmeshQSO = 1
 
         export("Output", "datadir")
+        if basedir is not None:
+            self.datadir = os.path.join(basedir, self.datadir)
 
         jn = lambda x: os.path.join(self.datadir, x)
         export("Output", "PowerSpectrumCache", default=jn('power.txt'))

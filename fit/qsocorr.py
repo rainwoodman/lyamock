@@ -11,11 +11,11 @@ from common import Skymask
 
 
 def getrandom(A):
-    NR = 8000000
 #    R = numpy.random.uniform(size=(NR, 3)) * D.ptp(axis=0)[None, :] \
 #            + D.min(axis=0)[None, :]
     sightlines = Sightlines(A)
     skymask = Skymask(A)
+    NR = len(sightlines) / skymask.fraction * 4
     realradius = sightlines.R
     R = numpy.empty(NR, ('f4', 3))
     mu = numpy.random.uniform(size=NR) * 2 - 1
