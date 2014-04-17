@@ -1,0 +1,462 @@
+\documentclass{paper}
+\usepackage{units}
+\usepackage{amsmath}
+\usepackage{graphicx}
+
+\begin{document}
+\newcommand{\diff}{\,\mathrm{d}}
+\newcommand{\mpch}{\,\unit{h^{-1}Mpc}}
+\newcommand{\kpch}{\,\unit{h^{-1}Kpc}}
+\title{A method to generate Quasar Correlated Lyman-$\alpha$
+    forest mocks}
+\author{Yu Feng}
+\maketitle
+
+\section{Summary}
+    The quasars in the mocks used in current Lyman-$\alpha$ forest analysis 
+    do not correlat with the density field. 
+
+    This article describes a method to produce mocks with correlated quasar and forest.
+
+    For a given cosmology ($\Omega$s), a survey
+    profile (quasar number density per redshift and sky
+    mask), the method produces a catelogue of quasars (redshift, RA
+    and DEC), and the optical depth $\tau$ or transmission fraction $F$ of 
+    forest pixels on uniform log-$\lambda$ pixels, binned into SDSS
+    pixels. Redshift distortion is included. 
+    
+    The method assumes \textbf{linear theory} in the underlining
+    matter and velocity field. \textbf{Lognormal transformation} (peak-background
+    split) is used to convert the matter field to local quasar
+    number density. \textbf{Fluctuating Gunn-Peterson
+    approximation} in addition to lognormal transformation is used to
+    convert the linear matter field to optical depth that
+    matches the mean and intrinsic variance of the
+    transmission fraction.
+    
+    The density field from which quasars are sampled is 
+    smoothed at $R_Q = 10\mpch$.
+    Forest field is smoothed at $R_\mathrm{LN} = 250\kpch$. The correlation
+    of forest is cut at $5\mpch$. The velocity field used in
+    redshift distortion of both (quasar and forest) is
+    cut at $5\mpch$.
+
+    The Gaussian modes in $k$ space for the quasar and forest
+    density field are identical $k$-space Gaussian random field
+    up to the required scale.  This guareentee the cross
+    correlation between quasars and the forest.
+
+    The code for generating mocks is in good shape; and its behavior
+    fairly well understood.
+    Figure \ref{fig:handwave} shows the correlation function measured
+    from 50 mocks on a DR10 foot-print survey.
+
+    We have been trying to verify the mocks with a RSD
+    measurement with the covariance matrix. 
+    \begin{figure}
+        \includegraphics[width=\columnwidth]{../mocks/handwaving}
+        \caption{Correlation functions on 50 Mocks with a
+        fake cosmology. Shaded area covers the scale
+        smoothing contaminates the linear theory correlation.  }
+        \label{fig:handwave}
+    \end{figure}
+
+\subsection{Notations}
+\begin{itemize}
+    \item $P(k, z)$
+        linear theory matter power spectrum at $z$; input;
+    \item $D(z)$
+        growth factor relative to $z=0$; input;
+
+    \item $x_0$ positions of the observer, conveniently
+        sitting in the center of the box; input;
+
+    \item $y_i$ positions of the $i$-th quasar; derived;
+
+    \item $\delta(x; R)$ 
+        Gaussian random field, smoothed to scale $R$;
+        smoothing is done in Fourier space with a kernel 
+        $(1 + (kR)^2)^{-1}$; derived;
+    \item $\delta|_{k_1}^{k_2}(x)$ 
+        Long range Gaussian random field; with power
+        spectrum cut between $k_1$ and $k_2$; derived;
+
+    \item $\eta_\mathrm{LN}(x; z)$ the lognormal
+        transformation of the over-density field; derived;
+
+    \item $b_Q(z)$ quasar bias; input;
+
+    \item $A(z)$ $B(z)$ parameters in FGPA for 
+        the Lyman$\alpha$ forest; $A$ corresponds to the
+        column density of HI clouds; $B$ corresponds to the 
+        equation of state of IGM; derived;
+
+    \item $\left<n_Q(z)\right>$ quasar number density as
+        function of redshift, obtained from survey / QLF;
+        input;
+    \item $\left<F(z)\right>$ the model of mean transmission
+        fraction; input;
+    \item $\left<\sigma_F(z)\right>$ the model of variance of
+        transmission fraction; input;
+
+\end{itemize}
+
+\section{Split Power Spectrum}
+    Over-density field $\delta(r)$ is the Fourier transform of
+    the power spectrum $P(k)$. For example, if $P(k)$ is cut to 
+    long range and short range at $k_0$, 
+
+    \begin{eqnarray*}
+        P_l(k; z) = \Theta(k - k_0)P(k; z) \\
+        P_s(k; z) = (1 - \Theta(k - k_0)) P(k; z);
+    \end{eqnarray*}
+    then the over-density field is also cut into two pieces
+    \[
+        \delta(x) = \delta|_{0}^{k_0}(x) +
+        \delta|_{k_0}^{\infty}(x).
+    \]
+    Notice that in practice, the Fourier transform is discrete.
+    Some form of interpolation over the large scale over-density field
+    shall be used; this interpolation shall be corrected in the small scale
+    field power spectrum which is not currently done.
+
+\section{Multiple realization at different scale}
+    We will sample the density field at different
+    resolution (with different size of discrete Fourier transforms).    
+    One issue is to maintain the consistency between different
+    realizations. 
+
+    The issue can be solved in the $K$-space.  We populate the K-space
+    Gaussian field with random numbers sampled
+    from identically initialized pseudo-random-number generators, in
+    the order from small $K$ [large scale] to large $K$ [small scale].
+    The algorithm is similar to that used in \small{Gadget}
+    / \small{N-GenIC}.
+
+\section{Point-wise objects: Quasars}
+    Quasar are point-wise objects. The problem we are
+    solving is to sample biased point-like objects that
+    from continuous density field. In practice these
+    point-wise objects can be anything that have a bias, eg, 
+    DLA or Lyman-limit systems.
+
+    Design goals:
+    \begin{itemize}
+        \item the algorithm shall be local; this eliminates the 
+              communication between sub-boxes;
+        \item the resolution of density field shall be coarse; 
+              because eventually every sample point in the density
+              field will be scanned;
+        \item at linear scale, the algorithm shall agree
+              with linear theory, yielding the correct bias,
+              etc.
+    \end{itemize}
+
+    Inputs:
+    \begin{enumerate}
+        \item 
+            We generate a realization of the density field 
+        with $R_Q = 10\,\mpch$ smoothing $\delta(x; R_Q)$ on
+        a $10\,\mpch$ mesh. 
+        \item $\left<n_Q(x, z)\right>$, 
+            the mean number density of quasars; this density is
+            corrected for the sky coverage.
+    \end{enumerate}
+
+    We require the expected number density of quasars in a given $R_Q$
+    cell, at redshift $z$ to be
+    \[
+        E[n_Q(x; z)] = \left<n_Q(x, z)\right> 
+        \exp \left\{b(z) \left( 
+        \delta(x; R_Q) - \frac{1}{2}\left<\delta(x;
+        R_Q)^2\right>
+    \right)\right\}.
+    \]
+
+
+    The transformation is
+    motivated by peak-background split; however notice that
+    the peak-background split condition is not, strictly
+    speaking, satisfied in this case.
+
+    The parameter $b(z)$ controls the bias. It turns out that
+    the bias of quasars generated with the lognormal method 
+    equals $b(z)$, up to $b(z)=4$, for $R_Q$ is around $10\,\mpch$. 
+    Therefore we set $b(z) = b_Q(z)$.
+
+    The expected number of quasars in a cell is given by 
+    \[
+        E[N_Q(x; z)] = R_Q^3 n_Q(x; z).
+    \]
+
+    The actual number of quasars in a cell is a random
+    variable. We assume a Poisson distribution with mean at
+    $E[N_Q(x; z)]$. Simple math shows that the distribution 
+    does not contaminate the correlation function, as long
+    as the numbers in different cells are IIDs.
+
+    The position of a quasar with in a cell ($r_{ab}$) is then draw from a
+    uniform distribution. Simple math shows that the
+    positioning within a cell has no effect on the
+    correlation function as long as the positions are IIDs.
+
+    \[
+        y_{a, b} = x_a + r_{ab}.
+    \]
+
+    As a final step, the Quasars that are not in the sky coverage are
+    removed.
+
+\subsection{Generating $\delta(x; R_\mathrm{Q})$}
+    We use two pieces of power spectrum; 
+    split at $k = 2\pi / \left\{600\, \mpch \right\}$.
+
+\section{Continuous: Lyman $\alpha$ Forest}
+    After the position of quasars is determined, we can draw
+    sightlines from the position of quasars $y_i$ 
+    to the observer $x_0$. 
+    
+    Unlike the discrete point-wise quasars, the
+    ``over'' transmission fraction of forest ($\delta_F$) is
+    a continuous field; the pixels on the sightlines simply
+    sample this continuous at some given scale.
+
+    We apply a lognormal transformation, then the Fluctuating Gunn Peterson
+    Approximation (FGPA) to convert the correlated Gaussian density
+    field $\delta(x)$ to a optical depth field.
+
+    The lognormal transformation is 
+    \[
+        \eta_\mathrm{LN}(x, z) = \exp\left\{
+        D(z) \delta(x; R_\mathrm{LN}) - \frac{1}{2} D(z)^2
+        \left<\delta(x; R_\mathrm{LN})^2\right> 
+        \right\},
+    \]
+
+    The lognormal transformation is applicable on a comoving
+    scale $R_\mathrm{LN}$ of around $200\,\kpch$. In
+    Bi \& Davidson, they choose a scale where the variance of the smoothed density field 
+    is around 1.0. We want to follow the
+    same variance. 
+    
+    In contrast to Bi \& Davidson, our density field has redshift 
+    evolution: $\delta(x; z) = D(z) \delta(x; z=0)$. We choose a 
+    smoothing scale where the variance between redshift $z=2.0$ 
+    and $z=3.0$ is close to 1.0; the scale is $R_\mathrm{LN} =
+    250\,\kpch$.
+
+    The formula for FGPA is
+    \[
+        T(x, z; R_\mathrm{LN}) = 
+          R_\mathrm{LN} A(z) 
+            \left(\eta_\mathrm{LN}(x,
+          z)\right) ^ {B(z)}.
+    \]
+
+    The two redshift dependant free parameters are $A(z)$
+    and $B(z)$. $A(z)$ controls the overall transmission
+    fraction at a given redshift, while $B(z)$ controls
+    the variance of the transmission fraction. These
+    parameters can be solved by requiring the mocks to match
+    up with the models: (fitting formula listed in Lee et al 2013)
+
+    \begin{enumerate}
+        \item The mean transmission fraction $\left<F\right>(z)$;
+        \item The intrinsic variance $\sigma_F(z)$.
+    \end{enumerate}
+
+    We cannot perform the fitting yet, because the 
+    optical depth field along line of sight $T(x, z; R_\mathrm{LN})$ 
+    is smoothed to $R_\mathrm{LN} = 250 \,\kpch$, a scale
+    very different from the length scale of a pixel in the survey.
+
+    To match the length scale, we resample $T(x, z; R_\mathrm{LN})$ 
+    onto the uniform log-$\lambda$ grid of the SDSS pixels. 
+    The integral for the $j$-th pixels on the $i$-th
+    quasar is
+    \[
+        \tau_i(j) = \int_{r_{j1}}^{r_{j2}} 
+        R_\mathrm{LN}^{-1} T(x_i(r), z_i(r); R_\mathrm{LN}) d r, 
+    \]
+    where $r_{j1}$ is the comoving distance at the beginning of 
+    the $j$-th pixel, $r_{j2}$ being the end.
+    $x_i(r)$ is the position of along the line of sight of
+    $i$-th quasar, relative to the observer at $x_0$. 
+
+    After resampling, we solve for $A(z)$ and $B(z)$ such
+    that the transmission fraction 
+    of $F = \exp -\tau_i(j)$  matches the constraints on
+    $\left<F\right>(z)$ and $\sigma_F(z)$. 
+
+    $B(z)$ corresponds to the FGPA parameter 
+    $b = 2-0.7(\gamma-1)$, where $\gamma$ describes the equation of 
+    state of IGM.  Allowing a running $B(z)$ 
+    is equivalent of allowing a running equation of state of IGM.
+    $B(z)$ varies slowly with redshift from 1.2 to 2.0 from
+    $z=2.0$ to $z=4.0$. A canonical value used in prevoius
+    literature is $\gamma = 1.6$, $b=1.58$.
+
+    Interestingly, $A(z)$ can be fit by an exponential function of $1/(1+z)$
+    $B(z)$ can be fit by a second order polynomial of
+    $1/(1+z)$. The origin of these fits is not understood.
+    See Figure \ref{fig:FGPA-AB}. The fitted mean
+    and intrinsic variance of forest pixels are shown in
+    Figure \ref{fig:FGPA-MV}.
+
+    \begin{figure}
+      \includegraphics{../mocks/AB}
+      \caption{Parameters in FGPA. $A(z)$ and $B(z)$. See text.}
+      \label{fig:FGPA-AB}
+    \end{figure}
+
+    \begin{figure}
+      \includegraphics{../mocks/MV}
+      \caption{Fitting to the transmission model. $\left<F\right>$ and
+$\sigma_F(z)$.}
+      \label{fig:FGPA-MV}
+    \end{figure}
+
+\subsection{Generating $\delta(x; R_\mathrm{LN})$}
+    In practice, the over-density field at lognormal scale is
+    generated with the power spectrum split into 3 pieces.
+    The first split is the same as the one in $\delta(x, R_Q)$. 
+    The second split is at around $R_S = 2\pi / k_2 = 5
+    \unit{Mpc/h}$.
+
+    The total over-density field contains three pieces,
+    \[
+        \delta(x; R_\mathrm{LN}) =
+        \delta|_{k_1}^{k_\mathrm{max}}(x) +
+        \delta|_{k_2}^{k_1}(x) +
+        \delta|_{k_\mathrm{min}}^{k_2}(x, R_\mathrm{LN}).
+    \]
+
+    We take an approximation on the third piece. We do not
+    generate(spatially) correlated Gaussian field on the
+    very small scale; rather, we replace the their piece
+    with a uncorrelated Gaussian with the same variance,
+    \[
+        \delta|_{k_\mathrm{min}}^{k_2}(x, R_\mathrm{LN})
+        \approx g \sim N(0, \left<\delta|_{k_\mathrm{min}}^{k_2}(x,
+        R_\mathrm{LN})^2\right>).
+    \]
+    
+    The approximation is different from LeGoff et al who
+    used templates with correlated small scale pixels.
+    We feel that since there is no reason to believe our
+    approach (linear theory + lognormal + FGPA) correctly capture the
+    short range correlation of forest pixels, there is no need to
+    include the small scale correlation ($r < R_S$), which adds on to the
+    computational complexity.
+
+\section{Redshift Distortion}
+Along with the initial Gaussian field at $R_S$, we also generate the
+linear theory displacement field $\Phi(x, z)$. Three components $x$,
+$y$, $z$ are generated with a simple differential kernel in $K$ space.
+The redshift evolution is linear
+
+\[
+    \Phi(x, z) = D(z) \Phi(x, z=0).
+\]
+
+The linear theory displacement $\Phi(x, z)$ is converted to RSD
+displacement via the Kaiser formula,
+\[
+    \mathbf{\Psi}(x, z) = F_\Omega(a) \mathbf{\Phi}(x, z),
+\]
+where
+\[
+    F_\Omega(a) = \left[\frac{\Omega_M}{a^3 E^2(a)}\right]^{0.6} .
+\]
+
+The redshift distortion displacement $\mathbf{\Psi}(x, z)$ is projected along the
+sight line. The position of the sample points on the $R_\mathrm{LN}$
+scale is shifted by $\Psi$ before the resampling to spectra pixels.
+
+The location of quasars is also shifted by the same RSD displacement
+field.
+
+\appendix
+\section{Useful Formula}
+\subsection{Hubble constant}
+\[
+    H(a) = H_0 a^{-1.5} \left[\Omega_M + 
+           (1 - \Omega_M - \Omega_L) a +
+       L a^3 \right] ^ {0.5}  .
+\] 
+The dimensionless Hubble constant
+\[
+    E(a) = \frac{H(a)}{H_0} .
+\]
+
+\subsection{Comoving distance}
+\[
+    D_c = D_H \int \frac{1}{E(z)} \diff z 
+        = \int \frac{1}{a E(a)} \diff \log a,
+\]
+where Hubble distance $D_H = \frac{c}{H_0}$.
+\subsection{Growth Factor}
+\[
+    \Delta^+(a) = E(a) 
+\int_{-\infty}^{\log a} \left[a E(a)\right]^{-3} a \diff \log a .
+\]
+Note that this does not contain the 2.5 factor people
+usually use. The factor will cancel out when we calculate
+the growth factor relative to today,
+$\Delta^+_0(a) = \Delta^+(a) / \Delta^+(1.0)$.
+\subsection{Displacement to velocity}
+This is used to convert displacement to velocity. 
+\[
+    F_\Omega(a) = \left[\frac{\Omega_M}{a^3 E^2(a)}\right]^{0.6} .
+\]
+
+\[
+    \mathbf{v} = a H(a) F_\Omega(a) \mathbf{\Psi} .
+\]
+
+The apparent displacement due to redshift distortion in
+comoving units is therefore,
+\[
+    \Delta r_\mathrm{RSD} = F_\Omega(a) \mathbf{\Psi} .
+\]
+
+A side note: in GADGET the velocity saved in snapshot file is 
+$\sqrt{a}\mathbf{v}$.
+
+\subsection{FPGA}
+see arxiv 9709303 Weinberg et al 1997 and also  LeGoff et
+al. 2011 (DOI: 10.1051/0004-6361/201117736).
+
+The optical depth $\tau$ is approximately,
+\[  \tau(a) = 
+    A_0(a)
+    \underbrace{
+        \exp \left(\beta \delta_b \right)
+    }_{A_1(a)}
+    \underbrace{
+        \left(1 + 
+        \frac{\diff ( \hat{r} \cdot \mathbf{v})}
+        {H(a) \diff r } \right)^{-1}
+    }_{A_2(a)}
+    \underbrace{
+        \left(\frac{\Gamma}{\unit[10^{-12}][s^{-1}]}
+        \right)^{-1}
+    }_{A_3(a)}
+    ,
+\] where $A_1$ accounts for density fluctuation, 
+         $A_2$ for redshift distortion, 
+         $A_3$ for photo-ionization, 
+   and we have grouped all other factors in Weinberg paper to $A_0(a)$, 
+   which will be decided by fitting the mean flux or 1D
+   powerspectrum to observation.
+
+   $A_1$ appears different from Weinberg paper. However, the
+   expansion gives
+   \[ 
+     \exp \left( \beta \delta_b \right)
+     = (1 + \delta + \dots)^\beta
+     \approx \left(\frac{\rho_b}{\bar{\rho_b}}\right)^\beta
+   \]
+
+
+\end{document}

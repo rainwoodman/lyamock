@@ -1,0 +1,17 @@
+[General]
+prefix = ./
+UseMocks = ['%03d' % i for i in range(0, 50)]
+CovarianceMatrixOutput = ./covariance-small.npz
+BigN = 20000
+PowerSpectrumCache = /home/yfeng1/physics/lyamock/power.txt
+
+[Fit]
+rmin = 40000
+rmax = 160000
+
+[Cosmology]
+Sigma8 = 0.8
+OmegaM = 0.26
+OmegaL = 0.74
+OmegaB = 0.044
+h = 0.72
