@@ -30,7 +30,7 @@ class CovConfig(ConfigBase):
         export = self.export
 
         export("General", "prefix")
-        export("General", "UseMocks", type=eval, default="None")
+        export("General", "UseMocks", type=eval, default=None)
         export("General", "PowerSpectrumCache")
         export("General", "BigN", type=int)
         export("Fit", ["rmin", "rmax"], type=float)
