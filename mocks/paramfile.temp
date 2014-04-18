@@ -20,7 +20,7 @@ h = 0.72
 [Quasar]
 SkymaskInput = /home/yfeng1/physics/lyamock/boss_survey.hpw
 QSOBiasInput = /home/yfeng1/physics/lyamock/bias-3.6.txt
-QSOScale = 10000
+QSOScale = 5000
 
 [FGPA]
 LogNormalScale = 250
