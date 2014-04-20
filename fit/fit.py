@@ -27,7 +27,9 @@ def main(config):
     covfull = numpy.load(config.CovarianceMatrixOutput)['cov']
     cov = covfull[MASK][:, MASK]
     
+    print 'inverting'
     INV = linalg.inv(covfull[MASK][:, MASK])
+    print 'inverted'
 
     x, chi = fit1(dummy, eigenmodes, INV, MASK)
 
@@ -56,8 +58,8 @@ def main(config):
             fittedparameters=fitted, chi=chi,
             error=error)
 
-def poles_err(dummy, cov):
-    cov[numpy.isnan(cov)] = 0.0 
+def covtopole(dummy, cov):
+   # cov[numpy.isnan(cov)] = 0.0 
     newdof = numpy.sum([func.poles.size for func in dummy])
     tmp = numpy.empty((newdof, cov.shape[0]))
     for i in range(cov.shape[0]):
@@ -74,14 +76,15 @@ def poles_err(dummy, cov):
             func.poles.copy().flat
             for func in dummy.uncompress(tmp[i, :])
             ])
-    err = numpy.diag(newcov) ** 0.5
-    rt = dummy.copy()
+    return newcov
 
+def poles_err(dummy, cov):
+    newcov = covtopole(dummy, cov)
+    rt = dummy.copy()
+    err = numpy.diag(newcov) ** 0.5
     offset = 0
     for func in rt:
-        func.poles.flat[:] = err[offset:].copy()
-        v = legvander(func.mu, func.poles.shape[1] - 1)
-        func.xi[...] = numpy.einsum('jl,il->ij', v, func.poles)
+        func.frompoles(err[offset:offset+func.poles.size].copy().reshape(len(func.r), -1))
         offset += func.poles.size
     return rt
 
@@ -95,8 +98,9 @@ def fit1(sample, eigenmodes, INV, mask):
         fac = 1.0 / (model.size - len(p))
         cost = numpy.einsum('i,ij,j', diff, INV, diff) * fac
         assert cost >= 0.0
+        print cost, p
         return cost
-    res = minimize(cost, p0) 
+    res = minimize(cost, p0, tol=1e-4) 
     print res.success, res.x, cost(res.x) ** 0.5
     return res.x, cost(res.x) ** 0.5
 

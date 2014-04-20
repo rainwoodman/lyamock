@@ -54,7 +54,7 @@
     We have been trying to verify the mocks with a RSD
     measurement with the covariance matrix. 
     \begin{figure}
-        \includegraphics[width=\columnwidth]{../mocks/handwaving}
+        \includegraphics[width=\columnwidth]{../mocks-10mpcqso/handwaving}
         \caption{Correlation functions on 50 Mocks with a
         fake cosmology. Shaded area covers the scale
         smoothing contaminates the linear theory correlation.  }
@@ -173,16 +173,16 @@
     \right)\right\}.
     \]
 
-
     The transformation is
     motivated by peak-background split; however notice that
     the peak-background split condition is not, strictly
     speaking, satisfied in this case.
 
-    The parameter $b(z)$ controls the bias. It turns out that
-    the bias of quasars generated with the lognormal method 
-    equals $b(z)$, up to $b(z)=4$, for $R_Q$ is around $10\,\mpch$. 
-    Therefore we set $b(z) = b_Q(z)$.
+    The parameter $b(z)$ controls the bias. Our numerical
+    experiment shows that the bias of quasars generated with
+    the lognormal method roughly follows $b(z)$, up to
+    $b(z)=4$, when $R_Q$ is around $10\,\mpch$. For a crude
+    approximation, we set $b(z) = b_Q(z)$.
 
     The expected number of quasars in a cell is given by 
     \[
@@ -304,13 +304,13 @@
     Figure \ref{fig:FGPA-MV}.
 
     \begin{figure}
-      \includegraphics{../mocks/AB}
+      \includegraphics{../mocks-10mpcqso/AB}
       \caption{Parameters in FGPA. $A(z)$ and $B(z)$. See text.}
       \label{fig:FGPA-AB}
     \end{figure}
 
     \begin{figure}
-      \includegraphics{../mocks/MV}
+      \includegraphics{../mocks-10mpcqso/MV}
       \caption{Fitting to the transmission model. $\left<F\right>$ and
 $\sigma_F(z)$.}
       \label{fig:FGPA-MV}
@@ -377,6 +377,32 @@ The location of quasars is also shifted by the same RSD displacement
 field.
 
 \appendix
+\section{Fitting}
+\begin{figure}
+    \includegraphics[width=\columnwidth]{../mocks-10mpcqso/000/bestfit}
+    \caption{Bestfit of 000}
+\end{figure}
+\begin{figure}
+    \includegraphics[width=\columnwidth]{../mocks-10mpcqso/001/bestfit}
+    \caption{Bestfit of 001}
+\end{figure}
+\begin{figure}
+    \includegraphics[width=\columnwidth]{../mocks-10mpcqso/002/bestfit}
+    \caption{Bestfit of 002}
+\end{figure}
+\begin{figure}
+    \includegraphics[width=\columnwidth]{../mocks-10mpcqso/bestfit-000}
+    \caption{Collage of fits 000-009}
+\end{figure}
+\begin{figure}
+    \includegraphics[width=\columnwidth]{../mocks-10mpcqso/bestfit-010}
+    \caption{Collage of fits 010-019}
+\end{figure}
+\begin{figure}
+    \includegraphics[width=\columnwidth]{../mocks-10mpcqso/bestfit-020}
+    \caption{Collage of fits 020-029}
+\end{figure}
+
 \section{Useful Formula}
 \subsection{Hubble constant}
 \[

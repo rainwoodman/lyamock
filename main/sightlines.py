@@ -169,9 +169,9 @@ class Visitor(object):
         A = self.A
         D = A.cosmology.D(a)
         bias = self.QSObias(a)
-        var = self.var1+self.var0
-        deltaLN = numpy.exp(D * delta - (D ** 2 * var) * 0.5)
-        qsonumberdensity = (deltaLN ** bias) * self.SurveyQSOdensity(a) 
+        var = self.var1 + self.var0
+        deltaLN = numpy.exp(bias * D * delta - (bias ** 2 * D ** 2 * var) * 0.5)
+        qsonumberdensity = deltaLN * self.SurveyQSOdensity(a) 
 
         Nqso = qsonumberdensity * self.cellsize ** 3
         Nqso = self.rng.poisson(Nqso)

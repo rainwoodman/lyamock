@@ -719,6 +719,12 @@ class CorrFunc(object):
     def mumesh(self):
         return numpy.tile(self.mu[None, :], (len(self.r), 1))
 
+    def frompoles(self, poles):
+        v = legvander(self.mu, poles.shape[1] - 1)
+        self.xi[...] = numpy.einsum('jl,il->ij', v, poles)
+        if hasattr(self, 'poles'):
+            del self.poles
+
     @Lazy
     def poles(self):
         orders = 4

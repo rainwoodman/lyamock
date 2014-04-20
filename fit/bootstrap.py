@@ -35,7 +35,7 @@ class RmuBinningIgnoreSelf(correlate.RmuBinning):
         mu[objid1 == objid2] = 10.0
         return self.linear(r, mu)
 
-def chop(A, Nside, pos):
+def chop(Nside, pos):
     """ bootstrap the sky, returns about 100 chunks, only 50 of them are big"""
     # we paint quasar uniformly as long as it is covered by sdss:
     Npix = chealpy.nside2npix(Nside)
@@ -64,9 +64,9 @@ def main(A):
 #    fdelta, fpos = numpy.empty((2, 1, 3))
 #    objectid = numpy.empty(1, dtype='i8')
 
-    qchunks = chop(A, 4, qpos) 
-    rchunks = chop(A, 4, rpos)
-    fchunks = chop(A, 4, fpos)
+    qchunks = chop(4, qpos) 
+    rchunks = chop(4, rpos)
+    fchunks = chop(4, fpos)
     Nchunks = len(qchunks)
     
     Nvars = fdelta.shape[-1]
