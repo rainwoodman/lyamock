@@ -24,7 +24,18 @@ class ConfigBase(object):
         export("Cosmology", "LymanAlpha", type=float, default=1216.0)
         export("Cosmology", "LymanBeta", type=float, default=1026.0)
 
+
         self.DH = self.C / self.H0
+
+        export("Cosmology", [
+            "Sigma8",
+            "OmegaM",
+            "OmegaB",
+            "OmegaL", 
+            "h"] , type=float)
+
+        self.cosmology = Cosmology(M=self.OmegaM, 
+            L=self.OmegaL, B=self.OmegaB, h=self.h, sigma8=self.Sigma8)
 
     def export(self, section, names, type=str, **kwargs):
         if not isinstance(names, (list, tuple)):
@@ -47,16 +58,6 @@ class Config(ConfigBase):
         ConfigBase.__init__(self, paramfile)
 
         export = self.export
-
-        export("Cosmology", [
-            "Sigma8",
-            "OmegaM",
-            "OmegaB",
-            "OmegaL", 
-            "h"] , type=float)
-
-        self.cosmology = Cosmology(M=self.OmegaM, 
-            L=self.OmegaL, B=self.OmegaB, h=self.h, sigma8=self.Sigma8)
 
         export("IC", [
             "Seed",
@@ -96,7 +97,7 @@ class Config(ConfigBase):
         # a pixel will be grid to grid. (grids are the edges)
         self.LogLamGrid = numpy.log10(self.Lambda0) + numpy.arange(5000) * 1e-4
 
-        # make sure it is smaller than the LogNormalScaler
+        # make sure it is smaller than the LogNormalScale
         self.NmeshLyaBox = 2 ** (int(numpy.log2(self.BoxSize / self.NmeshEff / self.LogNormalScale) + 1))
 
 
@@ -110,7 +111,9 @@ class Config(ConfigBase):
 
         export("Quasar", "QSOScale", type=float)
 
-        self.NmeshQSO = 2 ** (int(numpy.log2(self.BoxSize / self.Nrep / self.QSOScale) + .5))
+#        self.NmeshQSO = 2 ** (int(numpy.log2(self.BoxSize / self.Nrep / self.QSOScale) + .5))
+#        if self.NmeshQSO < 1: self.NmeshQSO = 1
+        self.NmeshQSO = int(self.BoxSize / self.Nrep / self.QSOScale)
         if self.NmeshQSO < 1: self.NmeshQSO = 1
 
         export("Output", "datadir")
@@ -280,8 +283,10 @@ def QSODensityModel(config):
 
     # fix it at z=0.
     density[0] = 0
-    return interp1d(a[::-1], density[::-1], bounds_error=False, fill_value=0.0)
-
+    rt = interp1d(a[::-1], density[::-1], bounds_error=False, fill_value=0.0)
+    mask = (z >= config.Zmin) & (z <= config.Zmax)
+    rt.Nqso = numpy.trapz(specdensity[mask], x=z[mask])
+    return rt
 try:
     import chealpy
 except ImportError:
@@ -320,7 +325,7 @@ class PowerSpectrum(object):
     """ PowerSpectrum is camb at z=0. Need to use
         Dplus to grow(shrink) to given redshift
     """
-    def __init__(self, A):
+    def __init__(self, A, smoothingscale=0.0):
         power = A.PowerSpectrumCache
         try:
             k, p = numpy.loadtxt(power, unpack=True)
@@ -336,6 +341,7 @@ class PowerSpectrum(object):
         p[numpy.isnan(p)] = 0
         self.k = k
         self.p = p
+        self.p *= numpy.exp(- (k * smoothingscale) ** 2)
     def __getitem__(self, i):
         return [self.k, self.p][i]
     def __iter__(self):
@@ -356,11 +362,13 @@ class PowerSpectrum(object):
     @Lazy
     def Pfunc(self):
         K, P = self
-        mask = ~numpy.isnan(P) & (K > 0)
+        mask = ~numpy.isnan(P) & (K > 0) & (P > 0)
         K = K[mask]
         P = P[mask]
-        return interp1d(K, P, kind=5)
-
+        intp = interp1d(numpy.log10(K), numpy.log10(P), kind=5, fill_value=-99, bounds_error=False)
+        def func(k):
+            return 10 **intp(numpy.log10(k))
+        return func
     def pole(self, r, order):
         """calculate the multipoles of xi at order for given P(K)
             in kpc/h units 
@@ -377,11 +385,10 @@ class PowerSpectrum(object):
         for i in range(len(r)):
             def func(k):
                 # damping from Xiao
-                rt = 4 * numpy.pi * Pfunc(k) * k ** 2 * \
-                     numpy.exp(- (k *1e3) ** 2) * kernel(k * r[i])
+                rt = 4 * numpy.pi * Pfunc(k) * k ** 2 * kernel(k * r[i])
                 rt = rt * (2 * numpy.pi) ** 3 # going from GADGET to xiao
                 return rt
-            xi[i] = quad(func, Kmin, Kmax)[0]
+            xi[i] = quad(func, Kmin, Kmax, limit=400, limlst=400, maxp1=400)[0]
         return xi * (2 * numpy.pi) ** -3
 
 def MeanFractionModel(config):

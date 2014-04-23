@@ -8,12 +8,17 @@ import pyfftw
 
 class begin_irfftn(numpy.ndarray):
     def __new__(cls, shape, dtype):
-        """ shape is the shape of the complezx input,
+        """ shape is the shape of the real output,
             call finish_irfftn to get the output
         """
-        input = pyfftw.n_byte_align_empty(shape, 64, dtype, order='C')
-        output = input.view(dtype=input.real.dtype)[..., :-2]
+        newshape = list(shape)
+        newshape[-1] = shape[-1] // 2 + 1
+        input = pyfftw.n_byte_align_empty(newshape, 64, dtype, order='C')
         input = input.view(type=cls)
+        if shape[-1] % 2 == 0:
+            output = input.view(dtype=input.real.dtype)[..., :-2]
+        else:
+            output = input.view(dtype=input.real.dtype)[..., :-1]
         input.output = output
         input.plan = pyfftw.FFTW(input, output,
                 axes=range(len(shape)),
@@ -88,7 +93,7 @@ def realize(power,
                          bounds_error=False, fill_value=0)
   K0 = 2 * numpy.pi / BoxSize
   if gaussian is None:
-      gaussian = begin_irfftn((Nsample, Nsample, Nsample // 2 + 1),
+      gaussian = begin_irfftn((Nsample, Nsample, Nsample),
             dtype=numpy.complex64)
       shuffle = build_shuffle((Nsample, Nsample, Nsample //2 + 1))
       gengaussian(gaussian, shuffle, seed)
@@ -148,7 +153,7 @@ def realize(power,
   # no need for fftw delta *= Nsample ** 3
   if return_deltak:
       return delta, deltak_copy
-  var = delta.var()
+  var = delta.var(dtype='f8')
   return delta, var
 
 def lognormal(delta, std, out=None):

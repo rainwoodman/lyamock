@@ -39,16 +39,6 @@ class CovConfig(ConfigBase):
         export("General", "EigenModesOutput",
                 default=os.path.join(self.prefix, "eigenmodes.npz"))
 
-        export("Cosmology", [
-            "Sigma8",
-            "OmegaM",
-            "OmegaB",
-            "OmegaL", 
-            "h"] , type=float)
-
-        self.cosmology = Cosmology(M=self.OmegaM, 
-            L=self.OmegaL, B=self.OmegaB, h=self.h, sigma8=self.Sigma8)
-
 class BootstrapDB(object):
     def __init__(self, config):
         def getfilename(mock):

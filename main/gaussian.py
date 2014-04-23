@@ -23,7 +23,7 @@ def main(A):
 
     sightlines = Sightlines(A)
     powerspec = PowerSpectrum(A)
-    gaussian = density.begin_irfftn((A.NmeshFine, A.NmeshFine, A.NmeshFine // 2 + 1),
+    gaussian = density.begin_irfftn((A.NmeshFine, A.NmeshFine, A.NmeshFine),
             dtype=numpy.complex64)
 
     shuffle = density.build_shuffle((A.NmeshFine, A.NmeshFine, A.NmeshFine //2 + 1))

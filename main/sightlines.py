@@ -19,35 +19,14 @@ def main(A):
     print 'preparing large scale modes'
 
     global shuffle, gaussian, powerspec
-    global var
+
     shuffle = density.build_shuffle((A.NmeshQSO, A.NmeshQSO, A.NmeshQSO //2 + 1))
-    gaussian = density.begin_irfftn((A.NmeshQSO, A.NmeshQSO, A.NmeshQSO // 2 + 1),
+    gaussian = density.begin_irfftn((A.NmeshQSO, A.NmeshQSO, A.NmeshQSO),
             dtype=numpy.complex64)
     powerspec = PowerSpectrum(A)
     var0 = initcoarse(A)
-    var1 = initqso1(A)
-    var = var1 + var0
-    bias = QSOBiasModel(A)(1/3.5) 
-    D = A.cosmology.D(1/3.5)
-    print 'total variance', var, 'coarse', var0, 'qso', var1
-    print 'variance of QSO over density', var * (D * bias)** 2
-#    std = var ** 0.5
-#    std = 1.07401503829 
-#    mean =  4.04737352692e-06
-#    print 'first run finished.'
-#    print 'std =', std
-#   std is not used because we do not use the log normal 
-    a = 1.0 / 3.0
-    SurveyQSOdensity = QSODensityModel(A)
-    qsonumberdensity = SurveyQSOdensity(a)
-    b = 500.0
-    percentile = b * qsonumberdensity * (A.BoxSize / A.Nrep / A.NmeshQSO)** 3
 
-    sigma = norm.ppf(1.0 - percentile)
-    print percentile, sigma
-    numpy.savetxt(A.datadir + '/qso-variance.txt', [var])
-
-    layout = A.layout(A.NmeshQSO ** 3, 1024 * 128)
+    layout = A.layout(A.NmeshQSO ** 3, 1024 * 1024)
 
     # purge the file
     output = file(A.QSOCatelog, mode='w')
@@ -73,7 +52,18 @@ def main(A):
                         raw['Z_REAL'] = QSOs.Z
                         raw.tofile(output)
                         output.flush()
+            if proc.mom[0] > 0:
+                print proc.mom[0], proc.mom[1] / proc.mom[0], \
+                    (proc.mom[2] / proc.mom[0]), proc.var, proc.var0, proc.var1\
+
                 N += len(QSOs)
+
+            var = proc.var1 + proc.var0
+            bias = QSOBiasModel(A)(1/3.5) 
+            D = A.cosmology.D(1/3.5)
+            print 'total variance', var, 'coarse', var0, 'qso', var1
+            print 'variance of QSO over density', var * (D * bias)** 2
+            numpy.savetxt(A.datadir + '/qso-variance.txt', [var])
             return N
                 
         NQSO = numpy.sum(pool.map(work, A.yieldwork(), star=True))
@@ -81,6 +71,7 @@ def main(A):
     sightlines = Sightlines(A)
     print sightlines.LogLamMax, sightlines.LogLamMin
     print sightlines.LogLamGridIndMax, sightlines.LogLamGridIndMin
+    print len(sightlines), SurveyQSOdensity.Nqso
 
 def initcoarse(A):
     global delta0
@@ -91,27 +82,6 @@ def initcoarse(A):
                    Kmax=A.KSplit)
     delta0 = spline_filter(delta0, order=4, output=numpy.dtype('f4'))
     return var0
-
-def initqso1(A):
-    print 'bootstrap the variance'
-    def kernel(kx, ky, kz, k):
-        f2 = 1 / (1 + (A.QSOScale * k) ** 2)
-        #f2 = numpy.exp(- (A.QSOScale * k) ** 2)
-        return f2
-    with sharedmem.Pool() as pool:
-      def work(seed):
-        density.gaussian(gaussian, shuffle, seed)
-        # add in the small scale power
-        delta1, var1 = density.realize(powerspec, None, 
-                  A.NmeshQSO, A.BoxSize / A.Nrep, Kmin=A.KSplit,
-                  kernel=kernel,
-                  gaussian=gaussian)
-        return var1
-  
-      # just do 16 small boxes to estimate the variance
-      var1 = numpy.mean(pool.map(work, A.RNG.randint(0, 1<<21, size=1)))
-    return var1
-
 
 class Visitor(object):
     @classmethod
@@ -128,6 +98,16 @@ class Visitor(object):
     def __init__(self, box):
         A = self.A
         self.box = box
+        self.init = False
+        self.rng = numpy.random.RandomState(A.SeedTable[box.i, box.j, box.k]) 
+        self.cellsize = A.BoxSize / (A.NmeshQSO * A.Nrep)
+        self.Rmin = self.Dc(1 / (A.Zmin + 1)) * A.DH
+        self.Rmax = self.Dc(1 / (A.Zmax + 1)) * A.DH
+        self.mom = [0., 0., 0.]
+
+    def deferinit(self):
+        A = self.A
+        box = self.box
         density.gaussian(gaussian, shuffle, A.SeedTable[box.i, box.j, box.k])
         def kernel(kx, ky, kz, k):
             f2 = 1 / (1 + (A.QSOScale * k) ** 2)
@@ -136,32 +116,18 @@ class Visitor(object):
         delta1, var1 = density.realize(powerspec, 
               None,
               A.NmeshQSO, A.BoxSize / A.Nrep, Kmin=A.KSplit,
-              kernel=kernel,
+        #      kernel=kernel,
               gaussian=gaussian)
         self.delta = delta1
-        self.Rmin = self.Dc(1 / (A.Zmin + 1)) * A.DH
-        self.Rmax = self.Dc(1 / (A.Zmax + 1)) * A.DH
-        self.rng = numpy.random.RandomState(A.SeedTable[box.i, box.j, box.k]) 
-        self.cellsize = A.BoxSize / (A.NmeshQSO * A.Nrep)
         self.var1 = var1
-
+        self.var = var1 + self.var0
+    
     def getcoarse(self, xyzqso):
         xyz = xyzqso + self.box.REPoffset * self.A.NmeshQSO 
-        return 1.0 * xyz * self.A.NmeshCoarse / (self.A.NmeshQSO * self.A.Nrep)
+        return xyz * (1.0 * self.A.NmeshCoarse / (self.A.NmeshQSO * self.A.Nrep))
 
     def getcenter(self, xyzcoarse):
-        return xyzcoarse / self.A.NmeshCoarse * self.A.BoxSize - self.A.BoxSize * 0.5
-
-    def selectpixels(self, xyz, delta):
-        R = numpy.einsum('ij,ij->i', xyz, xyz) ** 0.5
-        u = self.rng.uniform(len(xyz))
-        #apply the redshift and skymask selection
-        mask = (R < self.Rmax) & (R > self.Rmin) & (self.skymask(xyz) > 0)
-        delta = delta[mask]
-        xyz = xyz[mask]
-        R = R[mask]
-        a = self.Dc.inv(R / self.A.DH)
-        return xyz, a, delta
+        return xyzcoarse * (1.0 / self.A.NmeshCoarse * self.A.BoxSize) - self.A.BoxSize * 0.5
 
     def getNqso(self, a, delta):
 #        bias = self.QSObias(a) 
@@ -171,20 +137,14 @@ class Visitor(object):
         bias = self.QSObias(a)
         var = self.var1 + self.var0
         deltaLN = numpy.exp(bias * D * delta - (bias ** 2 * D ** 2 * var) * 0.5)
+        deltaLN[deltaLN > 40.0] = 40.0 # remove 40 sigma peaks
         qsonumberdensity = deltaLN * self.SurveyQSOdensity(a) 
+        self.mom[0] += len(deltaLN)
+        self.mom[1] += delta.sum(dtype='f8')
+        self.mom[2] += (delta ** 2).sum(dtype='f8')
 
         Nqso = qsonumberdensity * self.cellsize ** 3
         Nqso = self.rng.poisson(Nqso)
-        #percentile = b * qsonumberdensity * self.cellsize ** 3
-
-        #var = self.var1 + self.var0
-        #std = var ** 0.5
-        #mask = delta / std > norm.ppf(1.0 - percentile)
-        # save the number of qsos, for non-host it is zero
-        #Nexpected = numpy.zeros_like(delta)
-        #Nexpected[mask] = 1.0 / b
-        #Nqso = numpy.zeros_like(delta, 'int32')
-        #Nqso[...] = self.rng.poisson(Nexpected)
 
         return Nqso
 
@@ -206,13 +166,37 @@ class Visitor(object):
         linear = numpy.arange(start, end, step)
         xyzqso = numpy.array(numpy.unravel_index(linear, (self.A.NmeshQSO,) * 3)).T
         xyzcoarse = self.getcoarse(xyzqso)
+        xyz = self.getcenter(xyzcoarse)    
+        R2 = numpy.einsum('ij,ij->i', xyz, xyz)
+        u = self.rng.uniform(len(xyz))
+        #apply the redshift and skymask selection
+        mask = (R2 < self.Rmax ** 2) & (R2 > self.Rmin ** 2) & (self.skymask(xyz) > 0)
+
+        if self.box.i == 0 and self.box.j == 0 and self.box.k == 0:
+            self.deferinit()
+            numpy.save('delta1.npy', self.delta)
+            self.init = True
+
+        if mask.any():
+            if not self.init:
+                self.deferinit()
+                self.init = True
+        else:
+            return numpy.rec.fromarrays([[], [], [], []],
+                    names=['R', 'DEC', 'RA', 'Z'])
+
+        linear = linear[mask]
+        xyz = xyz[mask]
+        xyzcoarse = xyzcoarse[mask]
+        xyzqso = xyzqso[mask]
+        R = R2[mask] ** 0.5
+
         delta = self.delta.take(linear) 
+
         delta += map_coordinates(delta0,
                 xyzcoarse.T, mode='wrap', order=4,
                 prefilter=False)
-
-        xyz = self.getcenter(xyzcoarse)    
-        xyz, a, delta = self.selectpixels(xyz, delta)
+        a = self.Dc.inv(R / self.A.DH)
         Nqso = self.getNqso(a, delta)
         return self.makeqso(xyz, Nqso)
 

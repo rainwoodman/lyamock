@@ -100,7 +100,7 @@ def fit1(sample, eigenmodes, INV, mask):
         assert cost >= 0.0
         print cost, p
         return cost
-    res = minimize(cost, p0, tol=1e-4) 
+    res = minimize(cost, p0, tol=1e-3) 
     print res.success, res.x, cost(res.x) ** 0.5
     return res.x, cost(res.x) ** 0.5
 
