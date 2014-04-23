@@ -57,13 +57,6 @@ def main(A):
                     (proc.mom[2] / proc.mom[0]), proc.var, proc.var0, proc.var1\
 
                 N += len(QSOs)
-
-            var = proc.var1 + proc.var0
-            bias = QSOBiasModel(A)(1/3.5) 
-            D = A.cosmology.D(1/3.5)
-            print 'total variance', var, 'coarse', var0, 'qso', var1
-            print 'variance of QSO over density', var * (D * bias)** 2
-            numpy.savetxt(A.datadir + '/qso-variance.txt', [var])
             return N
                 
         NQSO = numpy.sum(pool.map(work, A.yieldwork(), star=True))
