@@ -62,20 +62,32 @@ class Config(ConfigBase):
         export("IC", [
             "Seed",
             "NmeshCoarse",
-            "NmeshEff",
             "Nrep"], type=int)
 
         export("IC", ['Zmin', 'Zmax'], type=float)
         export("IC", "BoxPadding", type=float, default=2000.)
 
-
+        assert self.NmeshCoarse > self.Nrep * 2
         self.BoxSize = self.cosmology.Dc(1 / (1 + self.Zmax)) * self.DH * 2 + self.BoxPadding * 2
         self.KSplit = 0.5 * 2 * numpy.pi / self.BoxSize * self.NmeshCoarse * 1.0
 
-        assert self.NmeshEff % self.Nrep == 0
-        assert self.NmeshEff % self.NmeshCoarse == 0
+        export("Quasar", 
+                [
+                    "QSOBiasInput",
+                    "QSODensityInput",
+                    "SkymaskInput",
+                ] , 
+                default=None)
 
+        export("Quasar", "QSOScale", type=float)
+
+        self.NmeshQSO = int(self.BoxSize / self.Nrep / self.QSOScale)
+        if self.NmeshQSO < 1: self.NmeshQSO = 1
+
+        self.NmeshEff = self.NmeshQSO * self.Nrep
         self.NmeshFine = self.NmeshEff / self.Nrep
+
+        assert self.NmeshFine == self.NmeshQSO
 
         self.RNG = numpy.random.RandomState(self.Seed)
         self.SeedTable = self.RNG.randint(1<<21 - 1, size=(self.Nrep,) * 3)
@@ -100,21 +112,6 @@ class Config(ConfigBase):
         # make sure it is smaller than the LogNormalScale
         self.NmeshLyaBox = 2 ** (int(numpy.log2(self.BoxSize / self.NmeshEff / self.LogNormalScale) + 1))
 
-
-        export("Quasar", 
-                [
-                    "QSOBiasInput",
-                    "QSODensityInput",
-                    "SkymaskInput",
-                ] , 
-                default=None)
-
-        export("Quasar", "QSOScale", type=float)
-
-#        self.NmeshQSO = 2 ** (int(numpy.log2(self.BoxSize / self.Nrep / self.QSOScale) + .5))
-#        if self.NmeshQSO < 1: self.NmeshQSO = 1
-        self.NmeshQSO = int(self.BoxSize / self.Nrep / self.QSOScale)
-        if self.NmeshQSO < 1: self.NmeshQSO = 1
 
         export("Output", "datadir")
         if basedir is not None:

@@ -3,35 +3,40 @@ from common import Config
 from common import PowerSpectrum
 from lib.bresenham import drawline
 import sharedmem
-from lib import density
+from lib import density2
+from lib.lazy import Lazy
 from scipy.ndimage import spline_filter, map_coordinates
 
 from smallscale import initlya
 from sightlines import Sightlines
 
+dispkernel = [
+        lambda kx, ky, kz, k: 1j * kx * k ** -2,
+        lambda kx, ky, kz, k: 1j * ky * k ** -2,
+        lambda kx, ky, kz, k: 1j * kz * k ** -2
+]
+
 def main(A):
-    global gaussian, shuffle, varlya, var1
     # gaussian are used for each subbox.
     # slaves are processes so they won't damage these variables
     # from the master.
-    global powerspec
     global sightlines
-    global samples
+
     global deltafield
     global objectidfield
     global velfield
 
     sightlines = Sightlines(A)
     powerspec = PowerSpectrum(A)
-    gaussian = density.begin_irfftn((A.NmeshFine, A.NmeshFine, A.NmeshFine),
-            dtype=numpy.complex64)
-
-    shuffle = density.build_shuffle((A.NmeshFine, A.NmeshFine, A.NmeshFine //2 + 1))
     
     # fine1 takes some time, so we do it async
     # while initing lya and estimating box layout.
-    var0 = initcoarse(A)
+    delta0, var0, disp0 = initcoarse(A, powerspec)
     varlya = initlya(A)
+
+    den1 = density2.Density(A.NmeshFine, 
+            Kmin=A.KSplit, power=powerspec, 
+            BoxSize=A.BoxSize / A.Nrep)
     
     layout = A.layout(len(sightlines), chunksize=1024)
 
@@ -43,16 +48,16 @@ def main(A):
     objectidfield = sharedmem.empty(shape=Nsamples, dtype='i4')
     
     processors = [ 
-            AddDelta,
-            AddDisp(0),
-            AddDisp(1),
-            AddDisp(2),
+            (AddDelta, delta0),
+            (AddDisp(0), disp0[0]),
+            (AddDisp(1), disp0[1]), 
+            (AddDisp(2), disp0[2]),
         ]
 
-    for proc in processors:
-        proc.prepare(A)
+    for proc, d0 in processors:
+        proc.prepare(A, d0)
 
-    MemoryBytes = numpy.max([proc.MemoryBytes for proc in processors])
+    MemoryBytes = numpy.max([proc.MemoryBytes for proc, d0 in processors])
 
     np = int((sharedmem.total_memory() - 1024 ** 3) // MemoryBytes)
     np = numpy.min([sharedmem.cpu_count(), np])
@@ -63,67 +68,68 @@ def main(A):
     with sharedmem.Pool(np=np) as pool:
         def work(i, j, k):
             box = layout[i, j, k]
-            gaussian_save = numpy.empty_like(gaussian)
-            # gaussian field will be reused and it 
-            # takes time to generate them
-            density.gaussian(gaussian_save, shuffle, 
-                    A.SeedTable[i, j, k])
             var = None
-            for cls in processors:
-                proc = cls(box, gaussian_save)
+            for cls, d0 in processors:
+                proc = cls(box, den1, varlya)
                 N = 0
                 for chunk in box:
                     N += proc.visit(chunk)
-                if hasattr(proc, 'var1'):
-                    var = proc.var1
+                if cls is AddDelta:
+                    var1 = proc.var1
+
                 # free memory
                 del proc 
+
                 if N == 0: 
                     # no pixels
                     # No need to work on other processors
                     break
-            print 'done', i, j, k, N
-            return var
+            print 'done', i, j, k, N, var1
+            return var1
         def reduce(v1):
             if v1 is not None:
                 var1list.append(v1)
         pool.map(work, A.yieldwork(), reduce=reduce, star=True)
-    for field in Visitor.M:
-        Visitor.M[field].flush()
 
-    var1 = numpy.mean(var1list)
-    print 'gaussian-variance is', var0 + var1 + varlya
-    numpy.savetxt(A.datadir + '/gaussian-variance.txt', [var0 + var1 + varlya])
 
     deltafield.tofile(A.DeltaField)
     velfield.tofile(A.VelField)
     objectidfield.tofile(A.ObjectIDField)
 
+    D2 = A.cosmology.Dplus(1 / 3.0) / A.cosmology.Dplus(1.0)
+    D3 = A.cosmology.Dplus(1 / 4.0) / A.cosmology.Dplus(1.0)
+    var1 = numpy.nanmean(var1list)
+    var = var0 + var1 + varlya
+    print 'gaussian-variance is', var
+    numpy.savetxt(A.datadir + '/gaussian-variance.txt', [var])
+    print 'lya field', 'var', var
+    print 'growth factor at z=2.0, 3.0', D2, D3
+    print 'lya variance adjusted to z=2.0, z=3.0', D2 ** 2 * var, D3 **2 * var
 
 
-def initcoarse(A):
-    global delta0, disp0
-    delta0, var0 = density.realize(powerspec, 
-                   A.Seed, 
-                   A.NmeshCoarse, 
-                   A.BoxSize,
-                   Kmax=A.KSplit)
+def initcoarse(A, powerspec):
+    den0 = density2.Density(A.NmeshCoarse, 
+            power=powerspec,
+            BoxSize=A.BoxSize,
+            Kmax=A.KSplit)
+
+    den0.fill(seed=A.Seed, kernel=None)
+
+    delta0 = den0.realize()
+    var0 = delta0.var(dtype='f8')
     delta0 = spline_filter(delta0, order=4, output=numpy.dtype('f4'))
-
+    
     disp0 = numpy.empty((3, A.NmeshCoarse, 
         A.NmeshCoarse, A.NmeshCoarse), dtype='f4')
     for d in range(3):
-        disp0[d], junk = density.realize(powerspec, 
-                 A.Seed, A.NmeshCoarse,
-                 A.BoxSize, disp=d,
-                 Kmax=A.KSplit)
+        den0.fill(seed=A.Seed, kernel=dispkernel[d])
+        disp0[d] = den0.realize()
         disp0[d] = spline_filter(disp0[d], order=4, output=numpy.dtype('f4')) 
 
     print 'coarse field var', var0
-    return var0
+    return delta0, var0, disp0
 
 class Visitor(object):
-    M = {}
     @staticmethod
     def prepare(cls, A):
         """ prepare is called before the fork """
@@ -164,32 +170,33 @@ class Visitor(object):
 
 class AddDelta(Visitor):
     @classmethod
-    def prepare(cls, A):
+    def prepare(cls, A, delta0):
         Visitor.prepare(cls, A)
+        cls.delta0 = delta0
         cls.MemoryBytes = A.NmeshFine ** 3 * 8 * 2
 
-    def __init__(self, box, gaussian_save):
+    def __init__(self, box, den1, varlya):
         Visitor.__init__(self, box)
         A = self.A
-        gaussian[...] = gaussian_save
-        if True:
-            delta1, junk = \
-                density.realize(powerspec, 
-                   None, 
-                   A.NmeshFine, 
-                   A.BoxSize / A.Nrep, 
-                   Kmin=A.KSplit,
-                   gaussian=gaussian)
-            self.var1 = delta1.var()
-            self.delta1 = spline_filter(delta1, order=4, 
-                    output=numpy.dtype('f4'))
-        else:
-            self.delta1 = numpy.empty([A.NmeshFine, ] * 3)
-            self.var1 = 1.0
-
+        self.varlya = varlya
+        self.var1 = numpy.nan
         self.RNG = numpy.random.RandomState(
                A.SeedTable[box.i, box.j, box.k] 
             )
+        self.den1 = den1
+
+    @Lazy
+    def delta1(self):
+        box = self.box
+        i, j, k = box.i, box.j, box.k
+        if True:
+            self.den1.fill(seed=self.A.SeedTable[i, j, k], kernel=None)
+            delta1 = self.den1.realize()
+            self.var1 = delta1.var(dtype='f8')
+            return spline_filter(delta1, order=4,
+                    output=numpy.dtype('f4'))
+        else:
+            return numpy.zeros([A.NmeshFine, ] * 3, dtype='f4')
 
     def visit(self, chunk):
         xyz, objectid, t = self.getpixels(chunk)
@@ -197,14 +204,14 @@ class AddDelta(Visitor):
             return 0
         chunk.empty = False
         xyzcoarse = self.getcoarse(xyz)
-        d = map_coordinates(delta0, xyzcoarse.T, 
+        d = map_coordinates(self.delta0, xyzcoarse.T, 
                 mode='wrap', order=4, prefilter=False)
 
         xyzfine = self.getfine(xyz)
         d[:] += map_coordinates(self.delta1, xyzfine.T, 
                 mode='wrap', order=4, prefilter=False)
         N = len(xyzfine)
-        d[:] += self.RNG.normal(scale=varlya ** 0.5, size=N)
+        d[:] += self.RNG.normal(scale=self.varlya ** 0.5, size=N)
         deltafield[t] = d
         objectidfield[t] = numpy.int32(objectid)
         return len(xyz)
@@ -212,23 +219,29 @@ class AddDelta(Visitor):
 def AddDisp(d):
   class AddDisp(Visitor):
     @classmethod
-    def prepare(cls, A):
+    def prepare(cls, A, disp0):
         Visitor.prepare(cls, A)
         cls.MemoryBytes = A.NmeshFine ** 3 * 8 * 2
-    def __init__(self, box, gaussian_save):
+        cls.disp0 = disp0
+
+    def __init__(self, box, den1, varlya):
         Visitor.__init__(self, box)
+        self.den1 = den1
         A = self.A
-        dir = sightlines.dir
-        gaussian[...] = gaussian_save
-        self.disp1, junk = \
-            density.realize(powerspec,
-                None, 
-                A.NmeshFine,
-                A.BoxSize / A.Nrep, disp=d, Kmin=A.KSplit,
-                gaussian=gaussian
-                )
-        self.disp1 = spline_filter(self.disp1, 
-                order=4, output=numpy.dtype('f4'))
+
+    @Lazy
+    def disp1(self):
+        A = self.A
+        box = self.box
+        i, j, k = box.i, box.j, box.k
+        if True:
+            self.den1.fill(seed=A.SeedTable[i, j, k], kernel=dispkernel[d])
+            delta1 = self.den1.realize()
+            return spline_filter(delta1, order=4,
+                    output=numpy.dtype('f4'))
+        else:
+            return numpy.zeros([A.NmeshFine, ] * 3, dtype='f4')
+
     def visit(self, chunk):
         xyz, objectid, t = self.getpixels(chunk)
         if len(xyz) == 0: return 0
@@ -236,7 +249,7 @@ def AddDisp(d):
         xyzcoarse = self.getcoarse(xyz)
         xyzfine = self.getfine(xyz)
         proj = sightlines.dir[objectid, d]
-        disp = map_coordinates(disp0[d], 
+        disp = map_coordinates(self.disp0, 
                 xyzcoarse.T,
                 mode='wrap', order=4, prefilter=False)
         disp += map_coordinates(self.disp1, 

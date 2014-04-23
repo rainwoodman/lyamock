@@ -6,7 +6,6 @@ PowerSpectrumCache = /home/yfeng1/physics/lyamock/power.txt
 Zmin = 2.0
 Zmax = 4.0
 NmeshCoarse = 32
-NmeshEff = 2048
 NRep = 4
 Seed = @SEED@
 
@@ -20,7 +19,7 @@ h = 0.72
 [Quasar]
 SkymaskInput = /home/yfeng1/physics/lyamock/boss_survey.hpw
 QSOBiasInput = /home/yfeng1/physics/lyamock/bias-3.6.txt
-QSOScale = 10000
+QSOScale = 8000
 
 [FGPA]
 LogNormalScale = 250

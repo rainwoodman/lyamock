@@ -8,8 +8,9 @@ from common import QSOBiasModel
 from common import Skymask
 
 from scipy.ndimage import map_coordinates, spline_filter
+
 from lib.lazy import Lazy
-from lib import density
+from lib import density2
 
 # this code makes the sightlines
 from scipy.stats import norm
@@ -18,28 +19,28 @@ def main(A):
     """ quasars identify quasars"""
     print 'preparing large scale modes'
 
-    global shuffle, gaussian, powerspec
-
-    shuffle = density.build_shuffle((A.NmeshQSO, A.NmeshQSO, A.NmeshQSO //2 + 1))
-    gaussian = density.begin_irfftn((A.NmeshQSO, A.NmeshQSO, A.NmeshQSO),
-            dtype=numpy.complex64)
     powerspec = PowerSpectrum(A)
-    var0 = initcoarse(A)
+    den1 = density2.Density(A.NmeshQSO, power=powerspec,
+            BoxSize=A.BoxSize/A.Nrep,
+            Kmin=A.KSplit)
+            
+    delta0, var0 = initcoarse(A, powerspec)
 
     layout = A.layout(A.NmeshQSO ** 3, 1024 * 1024)
+
+    Visitor.prepare(A, delta0, var0)
+
+#    sharedmem.set_debug(True)
+    print 'spawn and work on intermediate scales'
 
     # purge the file
     output = file(A.QSOCatelog, mode='w')
     output.close()
 
-    Visitor.prepare(A, var0)
-
-#    sharedmem.set_debug(True)
-    print 'spawn and work on intermediate scales'
     with sharedmem.Pool() as pool:
         def work(i, j, k):
             box = layout[i, j, k]
-            proc = Visitor(box)
+            proc = Visitor(box, den1)
             N = 0
             for chunk in box:
                 QSOs = proc.visit(chunk)
@@ -54,7 +55,7 @@ def main(A):
                         output.flush()
             if proc.mom[0] > 0:
                 print proc.mom[0], proc.mom[1] / proc.mom[0], \
-                    (proc.mom[2] / proc.mom[0]), proc.var, proc.var0, proc.var1\
+                    (proc.mom[2] / proc.mom[0]), proc.var
 
                 N += len(QSOs)
             return N
@@ -64,23 +65,26 @@ def main(A):
     sightlines = Sightlines(A)
     print sightlines.LogLamMax, sightlines.LogLamMin
     print sightlines.LogLamGridIndMax, sightlines.LogLamGridIndMin
-    print len(sightlines), SurveyQSOdensity.Nqso
+    print len(sightlines), QSODensityModel(A).Nqso
 
-def initcoarse(A):
-    global delta0
-    delta0, var0 = density.realize(powerspec, 
-                   A.Seed, 
-                   A.NmeshCoarse, 
-                   A.BoxSize,
-                   Kmax=A.KSplit)
+def initcoarse(A, powerspec):
+    den0 = density2.Density(A.NmeshCoarse,
+            power=powerspec,
+            BoxSize=A.BoxSize,
+            Kmax=A.KSplit)
+
+    den0.fill(seed=A.Seed, kernel=None)
+    delta0 = den0.realize()
+    var0 = delta0.var(dtype='f8')
     delta0 = spline_filter(delta0, order=4, output=numpy.dtype('f4'))
-    return var0
+    return delta0, var0
 
 class Visitor(object):
     @classmethod
-    def prepare(cls, A, var0):
+    def prepare(cls, A, delta0, var0):
         cls.A = A
         cls.var0 = var0
+        cls.delta0 = delta0
         cls.Dplus = staticmethod(A.cosmology.Dplus)
         cls.Dc = staticmethod(A.cosmology.Dc)
 
@@ -88,33 +92,32 @@ class Visitor(object):
         cls.SurveyQSOdensity = staticmethod(QSODensityModel(A))
         cls.QSObias = staticmethod(QSOBiasModel(A))
 
-    def __init__(self, box):
+    def __init__(self, box, den1):
         A = self.A
         self.box = box
+        self.den1 = den1
+        i, j, k = box.i, box.j, box.k
         self.init = False
-        self.rng = numpy.random.RandomState(A.SeedTable[box.i, box.j, box.k]) 
+        self.rng = numpy.random.RandomState(A.SeedTable[i, j, k]) 
         self.cellsize = A.BoxSize / (A.NmeshQSO * A.Nrep)
         self.Rmin = self.Dc(1 / (A.Zmin + 1)) * A.DH
         self.Rmax = self.Dc(1 / (A.Zmax + 1)) * A.DH
         self.mom = [0., 0., 0.]
 
-    def deferinit(self):
+    @Lazy
+    def var(self):
+        return self.var0 + self.delta1.var(dtype='f8')
+
+    @Lazy
+    def delta1(self):
         A = self.A
         box = self.box
-        density.gaussian(gaussian, shuffle, A.SeedTable[box.i, box.j, box.k])
-        def kernel(kx, ky, kz, k):
-            f2 = 1 / (1 + (A.QSOScale * k) ** 2)
-            #f2 = numpy.exp(- (A.QSOScale * k) ** 2)
-            return f2
-        delta1, var1 = density.realize(powerspec, 
-              None,
-              A.NmeshQSO, A.BoxSize / A.Nrep, Kmin=A.KSplit,
-        #      kernel=kernel,
-              gaussian=gaussian)
-        self.delta = delta1
-        self.var1 = var1
-        self.var = var1 + self.var0
-    
+        i, j, k = box.i, box.j, box.k
+        self.den1.fill(seed=A.SeedTable[i, j, k], kernel=None)
+
+        delta1 = self.den1.realize()
+        return delta1
+
     def getcoarse(self, xyzqso):
         xyz = xyzqso + self.box.REPoffset * self.A.NmeshQSO 
         return xyz * (1.0 * self.A.NmeshCoarse / (self.A.NmeshQSO * self.A.Nrep))
@@ -128,8 +131,7 @@ class Visitor(object):
         A = self.A
         D = A.cosmology.D(a)
         bias = self.QSObias(a)
-        var = self.var1 + self.var0
-        deltaLN = numpy.exp(bias * D * delta - (bias ** 2 * D ** 2 * var) * 0.5)
+        deltaLN = numpy.exp(bias * D * delta - (bias ** 2 * D ** 2 * self.var) * 0.5)
         deltaLN[deltaLN > 40.0] = 40.0 # remove 40 sigma peaks
         qsonumberdensity = deltaLN * self.SurveyQSOdensity(a) 
         self.mom[0] += len(deltaLN)
@@ -166,17 +168,13 @@ class Visitor(object):
         mask = (R2 < self.Rmax ** 2) & (R2 > self.Rmin ** 2) & (self.skymask(xyz) > 0)
 
         if self.box.i == 0 and self.box.j == 0 and self.box.k == 0:
-            self.deferinit()
-            numpy.save('delta1.npy', self.delta)
-            self.init = True
+            numpy.save('delta1.npy', self.delta1)
 
-        if mask.any():
-            if not self.init:
-                self.deferinit()
-                self.init = True
-        else:
+        if not mask.any():
             return numpy.rec.fromarrays([[], [], [], []],
                     names=['R', 'DEC', 'RA', 'Z'])
+            # avoid accessing self.delta1
+            # which does the fft stuff.
 
         linear = linear[mask]
         xyz = xyz[mask]
@@ -184,9 +182,9 @@ class Visitor(object):
         xyzqso = xyzqso[mask]
         R = R2[mask] ** 0.5
 
-        delta = self.delta.take(linear) 
+        delta = self.delta1.take(linear) 
 
-        delta += map_coordinates(delta0,
+        delta += map_coordinates(self.delta0,
                 xyzcoarse.T, mode='wrap', order=4,
                 prefilter=False)
         a = self.Dc.inv(R / self.A.DH)
