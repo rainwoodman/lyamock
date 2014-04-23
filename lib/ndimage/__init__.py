@@ -174,7 +174,6 @@ from .fourier import *
 from .interpolation import *
 from .measurements import *
 from .morphology import *
-from .io import *
 
 __version__ = '2.0'
 
