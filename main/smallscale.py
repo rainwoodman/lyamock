@@ -25,11 +25,9 @@ def initlya(A):
     NBox = 8
     # fill the lya resolution small boxes
 
-    cutoff = 0.5 * 2 * numpy.pi / A.BoxSize * A.NmeshEff
-
     den3 = density2.Density(A.NmeshLyaBox, power=powerspec,
             BoxSize=A.BoxSize/A.NmeshEff,
-            Kmin=cutoff)
+            Kmin=A.Kmax)
 
     def kernel(kx, ky, kz, k):
         f2 = 1 / (1 + (A.LogNormalScale * k) ** 2)

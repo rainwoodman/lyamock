@@ -7,10 +7,10 @@ from common import QSODensityModel
 from common import QSOBiasModel
 from common import Skymask
 
-from scipy.ndimage import map_coordinates, spline_filter
 
 from lib.lazy import Lazy
 from lib import density2
+from lib.ndimage import map_coordinates, spline_filter
 
 # this code makes the sightlines
 from scipy.stats import norm
@@ -22,6 +22,7 @@ def main(A):
     powerspec = PowerSpectrum(A)
     den1 = density2.Density(A.NmeshQSO, power=powerspec,
             BoxSize=A.BoxSize/A.Nrep,
+            Kmax=A.Kmax,
             Kmin=A.KSplit)
             
     delta0, var0 = initcoarse(A, powerspec)

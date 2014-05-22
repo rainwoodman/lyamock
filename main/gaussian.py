@@ -5,7 +5,7 @@ from lib.bresenham import drawline
 import sharedmem
 from lib import density2
 from lib.lazy import Lazy
-from scipy.ndimage import spline_filter, map_coordinates
+from lib.ndimage import spline_filter, map_coordinates
 
 from smallscale import initlya
 from sightlines import Sightlines
@@ -35,6 +35,7 @@ def main(A):
     varlya = initlya(A)
 
     den1 = density2.Density(A.NmeshFine, 
+            Kmax=A.Kmax,
             Kmin=A.KSplit, power=powerspec, 
             BoxSize=A.BoxSize / A.Nrep)
     

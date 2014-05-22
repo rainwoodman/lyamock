@@ -4,8 +4,8 @@ from kdcount import correlate
 import chealpy
 import sharedmem
 from common import Config
+from common import CovConfig
 from common import PowerSpectrum
-from common import EigenModes
 
 from common import CorrFunc, CorrFuncCollection
 from common import MakeBootstrapSample
@@ -52,9 +52,14 @@ def chop(Nside, pos):
     assert (chunksize == numpy.bincount(chunkid, minlength=Npix)).all()
     return sharedmem.array.packarray(arg, chunksize)
 
-def main(A):
+def main(config, dirs):
     binning = RmuBinningIgnoreSelf(160000, Nbins=40, Nmubins=48, 
             observer=0)
+    for dir in dirs:
+        dobootstrap(binning, dir)
+
+def dobootstrap(binning, dir):
+    A = Config(dir + '/paramfile', dir) 
     r, mu = binning.centers
 
     qpos = getqso(A)
@@ -128,8 +133,6 @@ def main(A):
             DQDFsum1[2], DQDFsum2, RQDFsum1[2], RQDFsum2,
             DFDFsum1[2], DFDFsum2, len(qpos), len(rpos))
 
-    powerspec = PowerSpectrum(A)
-    eigenmodes = MakeEigenModes(powerspec, red)
     numpy.savez(os.path.join(A.datadir, 'bootstrap.npz'), 
             r=r,
             mu=mu,
@@ -147,58 +150,10 @@ def main(A):
             Fchunksize=fchunks.end - fchunks.start,
             red=red,
             real=real,
-            delta=delta,
-            eigenmodes=eigenmodes,
+            delta=delta
             )
-
-def MakeEigenModes(powerspec, templatecorrfunc):
-    """ create fitting eigenstates for a given powerspectrum
-        see Slosar paper.
-
-        basically getting out the poles of the powerspectrum,
-        then evaluate them on the grid given in templatecorrfunc.
-        this is used in bootstrap (for per sample)
-
-        usually, the eigenmodes are ordered first by the correlation functions, 
-        (QQ QF, FF) then by the multipole order (0, 2, 4)
-    """
-    dummy = templatecorrfunc
-
-    eigenmodes = []
-    N = len(dummy.compress())
-    annotation = []
-
-    for i in range(len(dummy)):
-        for order in [0, 2, 4]:
-            annotation.append((i, order))
-            eigenmode = dummy.copy()
-            eigenmode.uncompress(numpy.zeros(N))
-            eigenmode[i].xi = sharedmem.copy(eigenmode[i].xi)
-            eigenmodes.append(eigenmode)
-
-    with sharedmem.MapReduce() as pool:
-        def work(j):
-            i, order = annotation[j]
-            c = numpy.zeros(5)
-            c[order] = 1
-            # watch out the eigenmode is wikipedia
-            # no negative phase on 2nd order pole!
-            eigenmode = eigenmodes[j]
-            eigenmode[i].xi[...] = \
-                    powerspec.pole(eigenmode[i].r, order=order)[:, None] \
-                    * legval(eigenmode[i].mu, c)[None, :]
-        pool.map(work, range(len(annotation)))
-    # the eigenmodes are ordered first by the correlation functions, (QQ QF, FF)
-    # then by the multipole order (0, 2, 4)
-    #
-    for j in  range(len(annotation)):
-        i, order =annotation[j]
-        eigenmode = eigenmodes[j]
-        eigenmode[i].xi = numpy.array(eigenmode[i].xi, copy=True)
-
-    return EigenModes(eigenmodes)
 
 if __name__ == '__main__':
     from sys import argv
-    main(Config(argv[1]))
+    main(CovConfig(argv[1]), argv[2:])
 

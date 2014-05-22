@@ -45,7 +45,7 @@ class ConfigBase(object):
             try:
                 s = self.config.get(section, name)
                 v = type(s)
-            except ConfigParser.NoOptionError:
+            except (ConfigParser.NoOptionError, ConfigParser.NoSectionError):
                 if 'default' in kwargs:
                     v = kwargs['default']
                 else:
@@ -70,7 +70,6 @@ class Config(ConfigBase):
         assert self.NmeshCoarse > self.Nrep * 2
         self.BoxSize = self.cosmology.Dc(1 / (1 + self.Zmax)) * self.DH * 2 + self.BoxPadding * 2
         self.KSplit = 0.5 * 2 * numpy.pi / self.BoxSize * self.NmeshCoarse * 1.0
-
         export("Quasar", 
                 [
                     "QSOBiasInput",
@@ -86,6 +85,8 @@ class Config(ConfigBase):
 
         self.NmeshEff = self.NmeshQSO * self.Nrep
         self.NmeshFine = self.NmeshEff / self.Nrep
+
+        self.Kmax = 0.5 * 2 * numpy.pi / self.BoxSize * self.NmeshEff
 
         assert self.NmeshFine == self.NmeshQSO
 
@@ -120,6 +121,7 @@ class Config(ConfigBase):
         jn = lambda x: os.path.join(self.datadir, x)
         export("Output", "PowerSpectrumCache", default=jn('power.txt'))
         export("Output", "QSOCatelog", default=jn('QSOCatelog.raw'))
+        export("Output", "QSONpixel", default=jn('QSONpixel.raw'))
         export("Output", "DeltaField", default=jn('DeltaField.raw'))
         export("Output", "ObjectIDField", default=jn('ObjectIDField.raw'))
         export("Output", "VelField", default=jn('VelField.raw'))
@@ -128,6 +130,7 @@ class Config(ConfigBase):
         export("Output", "SpectraOutputTauRed", default=jn('SpectraOutputTauRed.raw'))
         export("Output", "SpectraOutputTauReal", default=jn('SpectraOutputTauReal.raw'))
         export("Output", "SpectraOutputDelta", default=jn('SpectraOutputDelta.raw'))
+        export("Output", "SpectraOutputLogLam", default=jn('SpectraOutputLogLam.raw'))
         print str(self)
 
     def __str__(self):
@@ -322,7 +325,7 @@ class PowerSpectrum(object):
     """ PowerSpectrum is camb at z=0. Need to use
         Dplus to grow(shrink) to given redshift
     """
-    def __init__(self, A, smoothingscale=0.0):
+    def __init__(self, A, cutscale=None):
         power = A.PowerSpectrumCache
         try:
             k, p = numpy.loadtxt(power, unpack=True)
@@ -336,9 +339,12 @@ class PowerSpectrum(object):
 
         # k ,and p are in KPC/h units!
         p[numpy.isnan(p)] = 0
+        if cutscale is not None:
+            mask = k <= 2 * numpy.pi / (0.5 * cutscale)
+            k = k[mask]
+            p = p[mask]
         self.k = k
         self.p = p
-        self.p *= numpy.exp(- (k * smoothingscale) ** 2)
     def __getitem__(self, i):
         return [self.k, self.p][i]
     def __iter__(self):
@@ -354,23 +360,37 @@ class PowerSpectrum(object):
         return self.pole(r, 4)
 
     def __call__(self, K):
-        return self.Pfunc(K)
+        return numpy.exp(self.Pfunc(numpy.log(K)))
 
     @Lazy
     def Pfunc(self):
+        """ used internally, returns a function evaluating
+            logp as function of logk.
+            because power spectrum is smoother in log-log plot,
+            this actually helps the convergence by quite a bit
+            in the integral in self.pole.
+        """
         K, P = self
         mask = ~numpy.isnan(P) & (K > 0) & (P > 0)
         K = K[mask]
         P = P[mask]
-        intp = interp1d(numpy.log10(K), numpy.log10(P), kind=5, fill_value=-99, bounds_error=False)
-        def func(k):
-            return 10 **intp(numpy.log10(k))
-        return func
+        intp = interp1d(numpy.log(K), numpy.log(P), kind=5, fill_value=-99, bounds_error=False)
+        intp.__doc__ = """logp as function of used logk """
+        return intp
+
     def pole(self, r, order):
         """calculate the multipoles of xi at order for given P(K)
             in kpc/h units 
             note that the j2 pole is negative from pat's
             1104.5244v2.pdf
+
+            We do quad integration on logk. It helps the 
+            convergence. not doing logk if the smoothing scale
+            is 10mpc/h we get junk monopole etc. doing logk
+            we get sensible monopole.
+
+            there is a 100kpc/h damping. important to avoid small
+            scale ringing due to numericals.  pure numerical it is.
         """
         assert order in [0, 2, 4]
         kernel = [j0, None, j2, None, j4][order]
@@ -380,12 +400,17 @@ class PowerSpectrum(object):
         Kmin = K.min()
         Kmax = K.max()
         for i in range(len(r)):
-            def func(k):
-                # damping from Xiao
-                rt = 4 * numpy.pi * Pfunc(k) * k ** 2 * kernel(k * r[i])
-                rt = rt * (2 * numpy.pi) ** 3 # going from GADGET to xiao
+            def func(logk):
+                k = numpy.exp(logk)
+                rt = 4 * numpy.pi
+                rt *= numpy.exp(Pfunc(logk)) 
+                rt *= k ** 2 
+                rt *= numpy.exp(-(k * 100) ** 2) # smoothing avoid oscillation, keep this term, got it from xiao
+                rt *= kernel(k * r[i]) 
+                rt *= k # d logk
+                rt *= (2 * numpy.pi) ** 3 # going from GADGET to xiao
                 return rt
-            xi[i] = quad(func, Kmin, Kmax, limit=400, limlst=400, maxp1=400)[0]
+            xi[i] = quad(func, numpy.log(Kmin), numpy.log(Kmax), limit=400, limlst=400, maxp1=400)[0]
         return xi * (2 * numpy.pi) ** -3
 
 def MeanFractionModel(config):
@@ -404,13 +429,14 @@ def VarFractionModel(config):
         return A * (1 / a / Z) ** B * mfm(a) ** 2
     return func
 
-def MeanFractionMeasured(config, real=False):
+def MeanFractionMeasured(config, kind='red'):
     f = numpy.load(config.MeasuredMeanFractionOutput)
     ameanFbins = f['abins']
-    if real:
-        meanF = f['xmeanFreal']
-    else:
+    if kind == 'red':
         meanF = f['xmeanF']
+    else:
+        meanF = f['xmeanF' + kind]
+
     def func(a):
         dig = numpy.digitize(a, ameanFbins).clip(0, len(ameanFbins) - 2)
         return meanF[dig]
@@ -650,7 +676,7 @@ class SpectraOutput(object):
     def taured(self):
         taured = numpy.memmap(self.config.SpectraOutputTauRed, mode='r+', dtype='f4')
         return self.Accessor(taured) 
-        
+
     @Lazy
     def taureal(self):
         taureal = numpy.memmap(self.config.SpectraOutputTauReal, mode='r+', dtype='f4')
@@ -766,6 +792,11 @@ class CorrFunc(object):
 
     def copy(self):
         return CorrFunc(self.r, self.mu, self.xi.copy())
+
+    @staticmethod
+    def symmetric(r, mu):
+        mu = mu[len(mu)//2:]
+        return CorrFunc(r, mu)
 
     @staticmethod
     def QQ(r, mu, DQDQ, RQDQ, RQRQ, ratio):

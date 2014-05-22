@@ -2,11 +2,13 @@
 \usepackage{units}
 \usepackage{amsmath}
 \usepackage{graphicx}
+\usepackage{listings}
 
 \begin{document}
 \newcommand{\diff}{\,\mathrm{d}}
 \newcommand{\mpch}{\,\unit{h^{-1}Mpc}}
 \newcommand{\kpch}{\,\unit{h^{-1}Kpc}}
+\lstset{basicstyle=\footnotesize\ttfamily}
 \title{A method to generate Quasar Correlated Lyman-$\alpha$
     forest mocks}
 \author{Yu Feng}
@@ -48,8 +50,14 @@
 
     The code for generating mocks is in good shape; and its behavior
     fairly well understood.
-    Figure \ref{fig:handwave} shows the correlation function measured
-    from 50 mocks on a DR10 foot-print survey.
+    Figure 
+    \ref{fig:handwave-1} 
+    \ref{fig:handwave-2} 
+    \ref{fig:handwave-3} 
+    \ref{fig:handwave-4}
+    shows the correlation function measured from 50 mocks on
+    a DR10 foot-print survey, with different choices of
+    $R_Q$ and smoothing method.
 
     We have been trying to verify the mocks with a RSD
     measurement with the covariance matrix. 
@@ -57,8 +65,33 @@
         \includegraphics[width=\columnwidth]{../mocks-10mpcqso/handwaving}
         \caption{Correlation functions on 50 Mocks with a
         fake cosmology. Shaded area covers the scale
-        smoothing contaminates the linear theory correlation.  }
-        \label{fig:handwave}
+        smoothing contaminates the linear theory
+        correlation. Power spectrum cut at $10\,\mpch$.  }
+        \label{fig:handwave-1}
+    \end{figure}
+    \begin{figure}
+        \includegraphics[width=\columnwidth]{../mocks-10mpcqso-smooth/handwaving}
+        \caption{Correlation functions on 50 Mocks with a
+        fake cosmology. Shaded area covers the scale
+        smoothing contaminates the linear theory
+    correlation. Power spectrum smoothed at $10\,\mpch$. }
+        \label{fig:handwave-2}
+    \end{figure}
+    \begin{figure}
+        \includegraphics[width=\columnwidth]{../mocks-5mpcqso-smooth/handwaving}
+        \caption{Correlation functions on 50 Mocks with a
+        fake cosmology. Shaded area covers the scale
+        smoothing contaminates the linear theory
+    correlation. Power spectrum smoothed at $5\,\mpch$.  }
+        \label{fig:handwave-3}
+    \end{figure}
+    \begin{figure}
+        \includegraphics[width=\columnwidth]{../mocks/handwaving}
+        \caption{Correlation functions on 50 Mocks with a
+        fake cosmology. Shaded area covers the scale
+        smoothing contaminates the linear theory
+    correlation. Power spectrum cut at $8\,\mpch$.  }
+        \label{fig:handwave-4}
     \end{figure}
 
 \subsection{Notations}
@@ -91,9 +124,10 @@
         column density of HI clouds; $B$ corresponds to the 
         equation of state of IGM; derived;
 
-    \item $\left<n_Q(z)\right>$ quasar number density as
+    \item $\left<n_Q(z)\right>$ quasar number density (per
+        unit volume) as
         function of redshift, obtained from survey / QLF;
-        input;
+        input; this density is corrected for the sky coverage.
     \item $\left<F(z)\right>$ the model of mean transmission
         fraction; input;
     \item $\left<\sigma_F(z)\right>$ the model of variance of
@@ -152,23 +186,26 @@
               etc.
     \end{itemize}
 
-    Inputs:
+    We realize the density field with the following
+            configurations:
     \begin{enumerate}
         \item 
-            We generate a realization of the density field 
-        with $R_Q = 10\,\mpch$ smoothing $\delta(x; R_Q)$ on
-        a $10\,\mpch$ mesh. 
-        \item $\left<n_Q(x, z)\right>$, 
-            the mean number density of quasars; this density is
-            corrected for the sky coverage.
+            $R_Q = 5\,\mpch$, smoothing $\delta(x; R_Q)$ at
+            $5\,\mpch$.
+        \item
+            $R_Q = 10\,\mpch$, smoothing $\delta(x; R_Q)$ at
+            $10\,\mpch$.
+        \item
+            $R_Q = 10\,\mpch$, sharp cut at $10\,\mpch$.
     \end{enumerate}
+
 
     We require the expected number density of quasars in a given $R_Q$
     cell, at redshift $z$ to be
     \[
         E[n_Q(x; z)] = \left<n_Q(x, z)\right> 
-        \exp \left\{b(z) \left( 
-        \delta(x; R_Q) - \frac{1}{2}\left<\delta(x;
+        \exp \left\{\left( 
+        b(z) \delta(x; R_Q) - \frac{1}{2}b^2(z)\left<\delta(x;
         R_Q)^2\right>
     \right)\right\}.
     \]
@@ -485,4 +522,60 @@ The optical depth $\tau$ is approximately,
    \]
 
 
+\section{Date Format}
+\subsection{Quasars}
+    The quasars in the simulation are saved in one file per
+    mock. Usually saved in {\tt
+    datadir/QSOcatelogue.raw}. {\tt RA} and {\tt DEC} angle of the quasar is
+    saved in radians. {\tt Z\_RED} is the redshift
+    distorted (RSD) 
+    redshift of a quasar. {\tt Z\_REAL} is the non-RSD 
+    redshift of a quasar.
+
+    The file can be accessed with numpy, as illustrated in the
+    following example.
+    \begin{lstlisting}[language=Python]
+        dtype = numpy.dtype([('RA', 'f8'), 
+                             ('DEC', 'f8'), 
+                             ('Z_RED', 'f8'),
+                             ('Z_REAL', 'f8'),
+                             ])
+        QSOcatelog = numpy.fromfile('QSOcatelog.raw', dtype=dtype)
+        print QSOcatelog
+    \end{lstlisting}
+
+\subsection{Forest Spectra}
+    The forest is a bit more convoluted. There are several
+    involved files: \begin{description}
+        \item {\tt QSONpixel.raw} The number of forest
+            pixels in each spectra line. It contains one 32 bit
+            integer per QSO.
+        \item {\tt SpectraOutputTauRed.raw}
+            The RSD optical depth of pixels. One single
+            precision floating number per pixel. All QSO
+            spectra lines are concatenated into one file.
+        \item {\tt SpectraOutputTauReal.raw}
+            The RSD optical depth of pixels. One single
+            precision floating number per pixel. All QSO
+            spectra lines are concatenated into one file.
+        \item {\tt SpectraOutputLogLam.raw}.
+            The restframe wavelength of pixels, in
+            $\log_{10} /\mathrm{A}$.
+            One single precision floating number per pixel.
+            All QSO spectra lines are concatenated into one
+            file.
+    \end{description}
+    The file can be accessed with numpy, as illustrated in the
+    following example.
+    \begin{lstlisting}[language=Python]
+        Npixels = numpy.fromfile('QSONpixel.raw', 'i4')
+        End = Npixels.cumsum()
+        Start = numpy.concatenate([[0], END])
+
+        tau = numpy.fromfile('SpectraOutputTauRed.Raw', 'f4')
+        loglam = numpy.fromfile('SpectraOutputLogLam.Raw', 'f4')
+        for i in range(len(Npixels)):
+            s = slice(Start[i], End[i])
+            print loglam[s], tau[s]
+    \end{lstlisting}
 \end{document}

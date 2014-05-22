@@ -13,8 +13,8 @@ from lib.chunkmap import chunkmap
 
 def getforest(A, Zmin, Zmax, RfLamMin, RfLamMax, combine=1):
     spectra = SpectraOutput(A)
-    meanFred = MeanFractionMeasured(A, real=False)
-    meanFreal = MeanFractionMeasured(A, real=True)
+    meanFred = MeanFractionMeasured(A, kind='red')
+    meanFreal = MeanFractionMeasured(A, kind='real')
 
     combine = numpy.minimum(spectra.sightlines.Npixels.max(), combine)
 
@@ -42,6 +42,7 @@ def getforest(A, Zmin, Zmax, RfLamMin, RfLamMax, combine=1):
         a = spectra.a[i]
         Fred = numpy.exp(-spectra.taured[i]) / meanFred(a) - 1
         Freal = numpy.exp(-spectra.taureal[i]) / meanFreal(a) - 1
+
         DFred[sl] = combinepixels(Fred)
         DFreal[sl] = combinepixels(Freal)
         Delta[sl] = combinepixels(spectra.delta[i])
@@ -82,7 +83,7 @@ def main(A):
     ax.set_ylim(-0.4, 1.0)
     ax.legend()
     ax = figure.add_subplot(313)
-    ax.plot(r / 1000, (r / 1000) ** 2 * xi[2], 'o ', label=r'$\delta_m$')
+    ax.plot(r / 1000, (r / 1000) ** 2 * xi[2], 'o ', label=r'$dF$ Broadband')
     ax.set_ylim(-20, 60)
     ax.legend()
     canvas = FigureCanvasAgg(figure)

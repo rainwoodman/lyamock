@@ -32,6 +32,7 @@ def main(A):
     ind = numpy.digitize(loglam, LogLamBins)
     N = numpy.bincount(ind, minlength=Nbins+2)
     N[N == 0] = 1.0
+
     F = numpy.exp(-spectra.taured.data)
     K1 = numpy.bincount(ind, F, minlength=Nbins+2) / N
     K2 = numpy.bincount(ind, F ** 2, minlength=Nbins+2) / N
@@ -47,13 +48,16 @@ def main(A):
     varFreal = K2 - K1 ** 2
     meanFreal = meanFreal[1:-1]
     varFreal = varFreal[1:-1]
+
     print z
     print meanF
     print varF
     numpy.savez(A.MeasuredMeanFractionOutput, 
-            a=1/(1+z), abins=1/(1+zBins), xmeanF=meanF, xvarF=varF, 
+            a=1/(1+z), abins=1/(1+zBins), 
+            xmeanF=meanF, xvarF=varF, 
             xmeanFreal=meanFreal,
-            xvarFreal=varFreal)
+            xvarFreal=varFreal,
+            )
 
 if __name__ == '__main__':
     from sys import argv

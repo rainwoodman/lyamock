@@ -61,7 +61,7 @@ class BootstrapDB(object):
         self.mu = files[0]['mu']
 
         # b/c they all have the same cosmology
-        self.eigenmodes = EigenModes(files[0]['eigenmodes'])
+        self.eigenmodes = EigenModes(numpy.load(config.EigenModesOutput)['eigenmodes'])
 
         self.DQDQ, self.RQDQ, self.RQRQ = sharedmem.empty(
                 [3, len(files)] + list(files[0]['DQDQ'].shape))
@@ -120,6 +120,13 @@ class BootstrapDB(object):
                 DQDQ, RQDQ, RQRQ, DQDFsum1, DQDFsum2, RQDFsum1, RQDFsum2,
                 DFDFsum1, DFDFsum2, ND.sum(), NR.sum())
 
+def MakeEmptySample(r, mu):
+    return CorrFuncCollection([
+        CorrFunc.symmetric(r, mu),
+        CorrFunc(r, mu),
+        CorrFunc.symmetric(r, mu)])
+
+        
 def MakeBootstrapSample(r, mu,
         DQDQ, RQDQ, RQRQ,
         DQDFsum1, DQDFsum2, 

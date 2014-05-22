@@ -3,6 +3,8 @@ import sharedmem
 from common import Config
 from common import Sightlines
 from common import FGPAmodel
+from common import SpectraOutput
+
 from lib.lazy import Lazy
 from lib.interp1d import  interp1d
 from lib.irconvolve import irconvolve
@@ -55,7 +57,8 @@ class SpectraMaker(object):
         deltaLN = numpy.exp(Dfactor * delta - (Dfactor ** 2 * var) * 0.5)
         return dreal, a, deltaLN, Dfactor
 
-    def convolve(self, i, Afunc, Bfunc, returns=['taured', 'taureal', 'delta', 'Zqso']):
+    def convolve(self, i, Afunc, Bfunc, returns=['taured', 'taureal', 'delta',
+        'Zqso', 'taubb']):
         """
             convolve the ith sightline, with Afunc(a) and Bfunc(a)
             for the A B factors,
@@ -175,6 +178,7 @@ def main(A):
     spectaured.flush()
     specdelta.flush()
     sightlines.Z_RED.flush()
+
 
 if __name__ == '__main__':
     from sys import argv

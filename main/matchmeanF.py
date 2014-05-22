@@ -59,42 +59,6 @@ def fitRange(A, LogLamMin, LogLamMax, Afguess, Bfguess):
     varF = romberg(fun, LogLamMin, LogLamMax) / (LogLamMax - LogLamMin)
     stdF = varF ** 0.5
 
-    if False:
-        # OK we have collected the tau values now use brentq to 
-        # solve for A.
-        Nactivesample = sightlines.ActiveSampleEnd - sightlines.ActiveSampleStart
-        ActiveSampleOffset = numpy.concatenate([[0], Nactivesample.cumsum()])
-        values = sharedmem.empty(ActiveSampleOffset[-1], 'f8')
-
-        print 'Active Nsamples', len(values)
-
-        def work(i):
-            sl = slice(ActiveSampleOffset[i], 
-                ActiveSampleOffset[i] + Nactivesample[i])
-            dreal, a, deltaLN, Dfactor = maker.lognormal(i)
-            values[sl] = deltaLN
-        chunkmap(work, range(len(sightlines)), 100)
-
-        # now values holds the deltaLNs.
-
-        # we simply divide the optical depth by this factor on every taureal
-        # to simulate the effect of splatting.
-        # this shall not change the variance in the wrong way.
-
-        N = 1.0 * len(values) / sightlines.Npixels.sum()
-        print "samples per pixel", N
-
-        G = numpy.int32(numpy.arange(len(values)) / N)
-
-        def cost(Af, Bf):
-            taureal = values ** Bf * A.LogNormalScale
-            taureal2 = numpy.bincount(G, weights=taureal)
-            F = numpy.exp(-Af * taureal2)
-            xmeanF = F.mean()
-            xstdF = F.std() 
-            v = (xmeanF/ meanF - 1) ,  (xstdF / stdF - 1) 
-            return v
-
     F = sharedmem.empty(sightlines.Npixels.sum(), 'f8')
     F[...] = numpy.nan
     def cost(Af, Bf):

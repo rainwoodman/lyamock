@@ -1,5 +1,4 @@
 import numpy
-from scipy.ndimage import spline_filter
 from scipy.integrate import romberg
 from snakefill import snakefill
 from scipy.interpolate import interp1d
