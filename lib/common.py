@@ -296,7 +296,7 @@ except ImportError:
 class Skymask(object):
     """ sky mask in mango healpix format """
     def __init__(self, config):
-        if config.SkymaskInput is not None:
+        if config.SkymaskInput is None:
             self.Nside = 2
             self.fraction = 1.0
             self.mask = numpy.ones(48)
