@@ -25,7 +25,9 @@ def main(A):
             Kmax=A.Kmax,
             Kmin=A.KSplit)
             
+    print 'init coarse'
     delta0, var0 = initcoarse(A, powerspec)
+    print 'done coarse'
 
     layout = A.layout(A.NmeshQSO ** 3, 1024 * 1024)
 
@@ -48,8 +50,8 @@ def main(A):
                 with pool.critical:
                     with file(A.QSOCatelog, mode='a') as output:
                         raw = numpy.empty(len(QSOs), dtype=Sightlines.dtype)
-                        raw['RA'] = QSOs.RA * 180 / numpy.pi
-                        raw['DEC'] = QSOs.DEC * 180 / numpy.pi
+                        raw['RA'] = QSOs.RA
+                        raw['DEC'] = QSOs.DEC
                         raw['Z_RED'] = QSOs.Z
                         raw['Z_REAL'] = QSOs.Z
                         raw.tofile(output)

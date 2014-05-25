@@ -31,6 +31,9 @@ def getforest(A, Zmin, Zmax, RfLamMin, RfLamMax, combine=1):
     mask = sharedmem.empty(Npixels, '?')
     id = sharedmem.empty(Npixels, 'i4')
 
+    spectra.taured
+    spectra.taureal
+
     def work(i):
         def combinepixels(value, method=numpy.mean):
             # reduce the number of pixels with 'method'

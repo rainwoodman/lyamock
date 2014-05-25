@@ -8,6 +8,7 @@ from scipy.interpolate import UnivariateSpline
 from scipy.integrate import quad, simps
 from lib.cosmology import Cosmology, Lazy
 from lib.sph_bessel import j0, j2, j4
+from lib.factorization import optimize_size_for_fftw
 
 class ConfigBase(object):
     def __init__(self, paramfile):
@@ -81,6 +82,7 @@ class Config(ConfigBase):
         export("Quasar", "QSOScale", type=float)
 
         self.NmeshQSO = int(self.BoxSize / self.Nrep / self.QSOScale)
+        self.NmeshQSO = optimize_size_for_fftw(self.NmeshQSO)
         if self.NmeshQSO < 1: self.NmeshQSO = 1
 
         self.NmeshEff = self.NmeshQSO * self.Nrep

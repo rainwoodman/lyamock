@@ -20,10 +20,14 @@ class InPlaceRealFFT(object):
         self.real = buffer.view(dtype=dtype)[..., :shape[-1]]
         self.complex = buffer
 
+        print self.real.shape
+        print self.complex.shape
+        print 'planning fftw'
         self.r2cPlan = pyfftw.FFTW(self.real, self.complex, axes=range(len(self.real.shape)),
-                direction='FFTW_FORWARD')
+                direction='FFTW_FORWARD', flag=['FFTW_ESTIMATE'])
         self.c2rPlan = pyfftw.FFTW(self.complex, self.real, axes=range(len(self.real.shape)),
-                direction='FFTW_BACKWARD')
+                direction='FFTW_BACKWARD', flag=['FFTW_ESTIMATE'])
+        print 'done planning fftw'
 
     def r2c(self):
         self.r2cPlan.execute()

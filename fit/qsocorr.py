@@ -34,8 +34,8 @@ def getrandom(A):
 def getqso(A):
     sightlines = Sightlines(A)
     skymask = Skymask(A)
-    ra = sightlines.RA / 180 * numpy.pi
-    dec = sightlines.DEC / 180 * numpy.pi
+    ra = sightlines.RA
+    dec = sightlines.DEC
     print ra.min(), ra.max(), dec.min(), dec.max()
     R = numpy.empty((len(sightlines), 3))
     R[:, 2] = numpy.sin(dec)
