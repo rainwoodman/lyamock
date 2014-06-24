@@ -20,7 +20,7 @@ def factors(n, gaps=[1,2,2,4,2,4,2,4,6,2,6], length=11, cycle=3):
     return fs
 
 import numpy
-def optimize_size_for_fftw(n):
+def optimize_size_for_fftw(n, maxfactor=11):
     """ 
         optimize mesh size for fftw
         find a mesh size that is close to n but made of smaller prime factors
@@ -28,7 +28,7 @@ def optimize_size_for_fftw(n):
     """
     def badness(n1, n):
         f = factors(n1)
-        if max(f) > 11: return 999999
+        if max(f) > maxfactor: return 999999
         return numpy.abs(n1 - n)
 
     b = [(badness(n1, n), n1) 

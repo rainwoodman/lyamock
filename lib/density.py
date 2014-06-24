@@ -110,7 +110,8 @@ def realize(power,
     PK = PowerSpec(K) ** 0.5
     if Kmin:
       # digging the hole
-      lowcut = K >= Kmin
+ #     lowcut = K >= Kmin (spherical)
+      lowcut = (i * K0 >= Kmin) & (j * K0 >= Kmin) & (k * K0 >= Kmin)
       #1 - numpy.exp( - (K / Kmin) ** 2)
    #   thresh = Kmin / K0
    #   if i < thresh and i > - thresh:
@@ -119,7 +120,8 @@ def realize(power,
    #     deltak[i][mask] = 0
       deltak[i] *= lowcut
     if Kmax:
-      highcut = K <= Kmax
+      #highcut = K <= Kmax
+      highcut = (i * K0 <= Kmax) & (j * K0 <= Kmax) & (k * K0 <= Kmax)
       #numpy.exp( - (K / Kmax) ** 2)
       deltak[i] *= highcut
     deltak[i] *= (PK * K0 ** 1.5)

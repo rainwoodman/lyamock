@@ -34,7 +34,7 @@ def main(config):
     x, chi = fit1(dummy, eigenmodes, INV, MASK)
 
     print 'x =', x
-    print 'p0 =', p0
+    print 'p0 = bF, bQ, BF, BQ', p0
 
     error = poles_err(dummy, covfull)
 
@@ -48,12 +48,14 @@ def main(config):
         fitted[i], chi[i] = fit1(sample, eigenmodes, INV, MASK)
         model = eigenmodes(fitted[i])
         print zip(sample[0].monopole, model[0].monopole)
-        return sample, model
+        return i, sample, model
     def reduce(rt):
-        s, m = rt
-        samples.append(s)
-        models.append(m)
+        i, s, m = rt
+        samples.append((i, s))
+        models.append((i, m))
     chunkmap(work, range(len(DB)), 100, reduce=reduce)
+    samples = [s for i, s in sorted(samples)]
+    models = [s for i, s in sorted(models)]
     numpy.savez("fit.npz", samples=samples, models=models, 
             fittedparameters=fitted, chi=chi,
             error=error)
@@ -89,7 +91,7 @@ def poles_err(dummy, cov):
     return rt
 
 def fit1(sample, eigenmodes, INV, mask):
-    p0 = [-0.4, 2, 2.5, 2.5]
+    p0 = [-0.2, 2, 0.5, 0.7]
     # we only want the part that is used in the covmatrix
     xi = sample.compress()[mask]
     def cost(p):
@@ -100,7 +102,7 @@ def fit1(sample, eigenmodes, INV, mask):
         assert cost >= 0.0
         print cost, p
         return cost
-    res = minimize(cost, p0, tol=1e-3) 
+    res = minimize(cost, p0, tol=1e-5, method='Nelder-Mead') 
     print res.success, res.x, cost(res.x) ** 0.5
     return res.x, cost(res.x) ** 0.5
 

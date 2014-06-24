@@ -93,6 +93,7 @@ class Density(object):
             K[...] = (Kx ** 2 + Ky ** 2 + Kz ** 2) ** 0.5
             PK = self.PowerSpec(K) ** 0.5
             if self.Kmin:
+#                lowcut = (Kx > self.Kmin) & (Ky > self.Kmin) & (Kz > self.Kmin)
                 # digging the hole
                 lowcut = K >= self.Kmin
               #1 - numpy.exp( - (K / Kmin) ** 2)
@@ -103,6 +104,7 @@ class Density(object):
              #     deltak[i][mask] = 0
                 deltak[i] *= lowcut
             if self.Kmax:
+                #highcut = (Kx <= self.Kmax) & (Ky <= self.Kmax) & (Kz <= self.Kmax)
                 highcut = K <= self.Kmax
                 #numpy.exp( - (K / Kmax) ** 2)
                 deltak[i] *= highcut

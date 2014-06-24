@@ -35,7 +35,7 @@ def main(A):
     varlya = initlya(A)
 
     den1 = density2.Density(A.NmeshFine, 
-            Kmax=A.Kmax,
+#            Kmax=A.Kmax,
             Kmin=A.KSplit, power=powerspec, 
             BoxSize=A.BoxSize / A.Nrep)
     

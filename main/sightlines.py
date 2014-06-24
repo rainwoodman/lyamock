@@ -22,7 +22,7 @@ def main(A):
     powerspec = PowerSpectrum(A)
     den1 = density2.Density(A.NmeshQSO, power=powerspec,
             BoxSize=A.BoxSize/A.Nrep,
-            Kmax=A.Kmax,
+#            Kmax=A.Kmax,
             Kmin=A.KSplit)
             
     print 'init coarse'
@@ -166,9 +166,10 @@ class Visitor(object):
         xyzcoarse = self.getcoarse(xyzqso)
         xyz = self.getcenter(xyzcoarse)    
         R2 = numpy.einsum('ij,ij->i', xyz, xyz)
-        u = self.rng.uniform(len(xyz))
+        u = self.rng.uniform(size=len(xyz))
         #apply the redshift and skymask selection
-        mask = (R2 < self.Rmax ** 2) & (R2 > self.Rmin ** 2) & (self.skymask(xyz) > 0)
+        sky = self.skymask(xyz)
+        mask = (R2 < self.Rmax ** 2) & (R2 > self.Rmin ** 2) & (sky > 0)
 
         if self.box.i == 0 and self.box.j == 0 and self.box.k == 0:
             numpy.save('delta1.npy', self.delta1)
@@ -181,6 +182,7 @@ class Visitor(object):
 
         linear = linear[mask]
         xyz = xyz[mask]
+        sky = sky[mask]
         xyzcoarse = xyzcoarse[mask]
         xyzqso = xyzqso[mask]
         R = R2[mask] ** 0.5
@@ -192,6 +194,7 @@ class Visitor(object):
                 prefilter=False)
         a = self.Dc.inv(R / self.A.DH)
         Nqso = self.getNqso(a, delta)
+        Nqso = numpy.int32(Nqso * sky)
         return self.makeqso(xyz, Nqso)
 
 if __name__ == '__main__':
